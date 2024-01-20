@@ -8,6 +8,9 @@ TODO: Explain the context of how/why this phase exists anyone would ever want th
 
 Anyways here's the usage info for everyone who already knows what I'm up to.
 
+![construction](readme_assets/exploded.jpg)
+![On the Go](readme_assets/on-the-go.jpg)
+
 # Hardware
 
 | Component                               | Link                                                                                             | Recommended Quantity |
