@@ -4,9 +4,9 @@
 
 This repo represents phase 1 of 3 of a larger overarching objective.
 
-TODO: Explain the context of how/why this phase exists anyone would ever want this.
+You can read about the nuance, design, and objectives here:
+* [https://www.labs.greynoise.io/grimoire/2024-03-01-rattagatta/](https://www.labs.greynoise.io/grimoire/2024-03-01-rattagatta/)
 
-Anyways here's the usage info for everyone who already knows what I'm up to.
 
 ![construction](readme_assets/exploded.jpg)
 ![On the Go](readme_assets/on-the-go.jpg)
