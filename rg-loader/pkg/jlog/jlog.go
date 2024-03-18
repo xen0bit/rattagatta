@@ -65,6 +65,7 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 
 	scanner := bufio.NewScanner(file)
 	ecnt := 0
+	gid := 0
 	for scanner.Scan() {
 		var ll LogLine
 		err := json.Unmarshal(scanner.Bytes(), &ll)
@@ -72,6 +73,7 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 			for mac, log := range ll.Logs {
 				if isMacString(mac) {
 					var record dbtools.RecordRow
+					record.Gid = gid
 					//Mac
 					record.Mac = mac
 					//Name
@@ -96,6 +98,8 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 							record.ServiceUUID = branch.Svc
 							//Characteristic
 							record.CharacteristicUUID = branch.Chr
+							//Properties
+							record.Properties = branch.Prop
 							//ReadValue
 							rv, err := hex.DecodeString(branch.Val)
 							if err == nil {
@@ -110,6 +114,7 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 		} else {
 			ecnt++
 		}
+		gid++
 	}
 	log.Println("Error Count:", ecnt)
 	close(logch)

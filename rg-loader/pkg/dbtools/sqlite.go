@@ -45,6 +45,7 @@ type CharRow struct {
 }
 
 type RecordRow struct {
+	Gid                int
 	Mac                string
 	Name               string
 	ManufacturerData   []byte
@@ -99,6 +100,7 @@ func (sc *SqliteConn) CreateTables() error {
 	);
 	CREATE TABLE "logs" (
 		id INTEGER not null primary key,
+		"gid" INTEGER,
 		"mac"	TEXT,
 		"name"	TEXT,
 		"man"	BLOB,
@@ -222,13 +224,13 @@ func (sc *SqliteConn) InsertLogData(chnl chan RecordRow) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT INTO logs (mac, name, man, svc, chr, props, val) VALUES (?,?,?,?,?,?,?)")
+	stmt, err := tx.Prepare("INSERT INTO logs (gid, mac, name, man, svc, chr, props, val) VALUES (?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for v := range chnl {
-		_, err = stmt.Exec(v.Mac, v.Name, v.ManufacturerData, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
+		_, err = stmt.Exec(v.Gid, v.Mac, v.Name, v.ManufacturerData, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
 		if err != nil {
 			return err
 		}
@@ -242,23 +244,38 @@ func (sc *SqliteConn) GenerateRecords() error {
 	CREATE TABLE IF NOT EXISTS logs_dedupe AS
 	select *
 	from logs
-	group by mac, name, man, svc, chr, props, val;
+	group by gid, mac, name, man, svc, chr, props, val;
 	`
 
 	records := `
 	CREATE TABLE IF NOT EXISTS records AS
-	select ld.mac                 as mac,
-	name,
-		ol.company_name       as company_name,
-		ld.man as manufacturer_data,
-		ld.svc        as service_uuid,
-		ld.chr as characteristic_uuid,
-		characteristic_name,
-		ld.val as val
-	from logs_dedupe ld
-			left join char_lookup cl on ld.chr = cl.characteristic_uuid
-			left join oui_lookup ol on ol.oui = SUBSTR(ld.mac, 1, 8)
-	order by ld.mac, ol.company_name, ld.svc, ld.chr, cl.characteristic_name asc;
+	select
+		gid,
+		ld.mac as mac,
+			name,
+			ld.man as manufacturer_data,
+			ld.svc as service_uuid,
+			ld.chr as characteristic_uuid,
+			ld.props as properties,
+			ld.val as val
+	from
+		logs_dedupe ld
+	group by
+		gid,
+		mac,
+		name,
+		man,
+		svc,
+		chr,
+		props,
+		val
+	order by
+		ld.gid,
+		ld.mac,
+		ld.svc,
+		ld.chr,
+		ld.props,
+		ld.val asc;
 	`
 
 	dropLogDedupe := `DROP TABLE logs_dedupe;`

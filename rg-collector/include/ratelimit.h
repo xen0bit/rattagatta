@@ -11,8 +11,9 @@
 // Structure to store id and its expiration time.
 struct RateLimit
 {
-  // id is CRC32 of either mac (public address) or manufacturer data (random address)
+  // CRC32 of either mac (public address) or manufacturer data (random address)
   uint32_t id;
+  // Time in the future when the rate limit expires
   unsigned long expiration;
 };
 
@@ -106,22 +107,25 @@ bool getOwnership(uint32_t id, int scannerIndex, int scannerCount)
 
 uint32_t getRateLimitId(NimBLEAdvertisedDevice *advertisedDevice)
 {
+  //We'll use a CRC32 checksum as the key for identifying a device
   uint32_t checksum;
-  // Public mac addr do not change, suitable for rate limit key
+  // Public mac addr type "should" not change, suitable for rate limit key
   if (advertisedDevice->getAddressType() == BLE_ADDR_PUBLIC)
   {
     checksum = CRC32::calculate(advertisedDevice->getAddress().getNative(), 6);
   }
-  // Random mac addr do change, unsuitable for rate limit key
-  // Pack manufacturer data into uint8_t[6] instead, which has a max length of 31 bytes
-  // but we'll use 32 for easy maths
+  // Random mac addr type can/do change, unsuitable for rate limit key
+  // Use the manufacturer data instead. While man data may *also* change,
+  // 
   else if (advertisedDevice->getAddressType() == BLE_ADDR_RANDOM)
   {
     checksum = CRC32::calculate(advertisedDevice->getManufacturerData().data(), advertisedDevice->getManufacturerData().length());
   }
   else
   {
-    // Honestly, fuck every other advertisement type, default to mac bheavior
+    // The rarer mac addr types just use their mac as the rate limit key
+    // As best as I can discern, there is no "best" choice here,
+    // but mac is the simplest of them 
     checksum = CRC32::calculate(advertisedDevice->getAddress().getNative(), 6);
   }
   return checksum;
