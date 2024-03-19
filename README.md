@@ -41,9 +41,7 @@ Hardware Target: `Seeed Studio XIAO ESP32-S3`
 1. Open `rg-collector` folder in PlatformIO IDE, wait for libraries to install etc...
 2. Connect `Seeed Studio XIAO ESP32-S3` via USB
 3. Open `platformio.ini`
-4. Set `upload_port = /dev/ttyACM0` to the device identifier for your XIAO
-5. Set `monitor_port = /dev/ttyACM0` to the device identifier for your XIAO
-6. PlatformIO -> Project Tasks -> Upload
+4. PlatformIO -> Project Tasks -> Upload
 
 If you have completed the steps above, already have the PlatformIO IDE open, and wish to flash more than one collector:
 1. Connect `Seeed Studio XIAO ESP32-S3` into USB
@@ -63,9 +61,7 @@ Hardware Target: `M5Stack Core2 ESP32`
 1. Open `rg-logger` folder in PlatformIO IDE, wait for libraries to install etc...
 2. Connect `M5Stack Core2 ESP32` via USB
 3. Open `platformio.ini`
-4. Set `upload_port = /dev/ttyACM0` to the device identifier for your M5Stack
-5. Set `monitor_port = /dev/ttyACM0` to the device identifier for your M5Stack
-6. PlatformIO -> Project Tasks -> Upload
+4. PlatformIO -> Project Tasks -> Upload
 
 The device will restart, attempt to initialize the MicroSD card, and begin attempting to discover and initialize `rg-collector`'s.
 
