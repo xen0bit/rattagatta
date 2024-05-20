@@ -13,6 +13,9 @@ String scannerMac;
 int scannerIndex = 0;
 int scannerCount = 1;
 
+char apple[2] = {0x4c, 0x00};
+bool ignoreApple = false;
+
 const char *ssid = "BLEAKEST"; // SSID Name
 const char *password = "";     // SSID Password - Set to NULL to have an open AP
 // WiFi Channels 1, 6, and 11 have the least amount of overlap with BLE advertisement channels
@@ -62,12 +65,27 @@ class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
       // Using the rateLimitId for a device advertisement, check if
       // the rateLimitId is populated in our rateLimitList and/or
       // if it's rateLimit has expired yet
-      if (advDevice == NULL && isConnectionAllowed(id))
+      if (advDevice == NULL && isConnectionAllowed(id) && advertisedDevice->isConnectable())
       {
-        // Set device reference for upcoming connection attempt
-        advDevice = advertisedDevice;
-        // Set flag that allows early-exiting the main loop()
-        doConnect = true;
+        //Apple {0x4c, 0x00} is EVERYWHERE
+        //Literally everywhere
+        //You can scale your collection as much as you want,
+        //You will only seemingly get data from Apple devices.
+        //At a certain point (pretty much instantly), you've seen it all.
+        //Ignore them, and prioritize literally anything else.
+        int shouldSkip = 1;
+        if (ignoreApple && advertisedDevice->getManufacturerData().length() >= 2)
+        {
+          shouldSkip = memcmp((uint8_t *)advertisedDevice->getManufacturerData().data(), apple, 2);
+        }
+
+        if (shouldSkip != 0)
+        {
+          // Set device reference for upcoming connection attempt
+          advDevice = advertisedDevice;
+          // Set flag that allows early-exiting the main loop()
+          doConnect = true;
+        }
       }
     }
     // LED OFF
