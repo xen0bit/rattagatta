@@ -48,11 +48,25 @@ If you have completed the steps above, already have the PlatformIO IDE open, and
 2. Open `src/main.cpp`
 3. Find `const int channel = 1; // WiFi Channel number between 1 and 13` at the top of the file.
 4. Increment the channel by 1
+6. Do the same for `const char *ssid = "BLEAKEST01"; // SSID Name`
 5. PlatformIO -> Project Tasks -> Upload
 
 This will spread out the WiFi channels as used for communication between devices and reduce interference. You will experience radio gremlins if you do not do this.
 
 The device will restart and **do absolutely nothing notable** until a running `rg-logger` initializes it. This is by design.
+
+## Collector OTA Update
+
+After the collector has been flashed at least once, OTA updates are possible.
+
+Connect to the relevant WiFi collector @ `BLEAKEST01`, build the firmware, upload via the web interface at:
+* `http://192.168.4.1/serverIndex`
+
+Alternatively, using curl via:
+
+```bash
+curl -vvv 'http://192.168.4.1/update' -X POST -F "update=@firmware.bin"
+```
 
 # Building/Flashing `rg-logger`
 
