@@ -8,6 +8,7 @@ extern uint8_t mb[6];
 struct HealthStatus
 {
   uint8_t mac[6];
+  String ssid;
   uint32_t channel;
   int eventCount;
   unsigned long lastUpdated;
@@ -29,9 +30,10 @@ bool isScannerInList(uint8_t mac[6])
   return false;
 }
 
-void addScannerToList(uint8_t mac[6], int32_t channel)
+void addScannerToList(uint8_t mac[6], String ssid, int32_t channel)
 {
   memcpy(healthStatusList[seenScanners].mac, mac, 6);
+  healthStatusList[seenScanners].ssid = ssid;
   healthStatusList[seenScanners].channel = channel;
   healthStatusList[seenScanners].eventCount = 0;
   healthStatusList[seenScanners].lastUpdated = 0;

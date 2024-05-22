@@ -77,8 +77,8 @@ void updateLcd()
   M5.Lcd.fillRect(0, (RECT_HEIGHT * 3), SCREEN_WIDTH, SCREEN_HEIGHT, TFT_BLACK);
   int xo = (RECT_WIDTH * 0);
   int yo = (RECT_HEIGHT * 3) + 5;
-  M5.Lcd.setTextColor(TFT_PURPLE);
-  M5.Lcd.setTextSize(5);
+  M5.Lcd.setTextColor(TFT_WHITE);
+  M5.Lcd.setTextSize(7);
   M5.Lcd.drawNumber(totalEvents, xo, yo);
 }
 
@@ -89,7 +89,7 @@ void sweepForBleakest()
   {
     for (int i = 0; i < n; ++i)
     {
-      if (WiFi.SSID(i) == "BLEAKEST")
+      if (WiFi.SSID(i).startsWith("BLEAKEST"))
       {
         uint8_t mac[6];
         memcpy(mac, WiFi.BSSID(i), 6);
@@ -98,7 +98,7 @@ void sweepForBleakest()
         {
           Serial.print("Adding ");
           Serial.println(WiFi.BSSIDstr(i));
-          addScannerToList(mac, WiFi.channel(i));
+          addScannerToList(mac, WiFi.SSID(i), WiFi.channel(i));
         }
       }
     }
@@ -108,9 +108,9 @@ void sweepForBleakest()
 bool connectWiFi(int scannerIndex)
 {
   Serial.print("Connecting to wifi...");
-  WiFi.begin(ssid, pass, healthStatusList[scannerIndex].channel, healthStatusList[scannerIndex].mac);
+  WiFi.begin(healthStatusList[scannerIndex].ssid, pass, healthStatusList[scannerIndex].channel, healthStatusList[scannerIndex].mac);
   // 10s timeout
-  unsigned long timeout = millis() + 10000;
+  unsigned long timeout = millis() + 5000;
   while (WiFi.status() != WL_CONNECTED && millis() < timeout)
   {
     delay(50);
