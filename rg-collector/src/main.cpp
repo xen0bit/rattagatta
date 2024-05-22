@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <WebServer.h>
+#include <Update.h>
 #define CONFIG_BT_NIMBLE_EXT_ADV 1
 #include <NimBLEDevice.h>
 #include <CRC32.h>
@@ -14,15 +15,56 @@ int scannerIndex = 0;
 int scannerCount = 1;
 
 char apple[2] = {0x4c, 0x00};
-bool ignoreApple = false;
+bool ignoreApple = true;
 
-const char *ssid = "BLEAKEST"; // SSID Name
-const char *password = "";     // SSID Password - Set to NULL to have an open AP
+const char *ssid = "BLEAKEST01"; // SSID Name
+const char *password = "";       // SSID Password - Set to NULL to have an open AP
 // WiFi Channels 1, 6, and 11 have the least amount of overlap with BLE advertisement channels
 const int channel = 1;        // WiFi Channel number between 1 and 13
 const bool hide_SSID = false; // To disable SSID broadcast -> SSID will not appear in a basic WiFi scan
 const int max_connection = 1; // Maximum simultaneous connected clients on the AP
+
 WebServer server(80);
+/*
+ * Server Index Page
+ */
+
+const char *serverIndex =
+    "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
+    "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
+    "<input type='file' name='update'>"
+    "<input type='submit' value='Update'>"
+    "</form>"
+    "<div id='prg'>progress: 0%</div>"
+    "<script>"
+    "$('form').submit(function(e){"
+    "e.preventDefault();"
+    "var form = $('#upload_form')[0];"
+    "var data = new FormData(form);"
+    " $.ajax({"
+    "url: '/update',"
+    "type: 'POST',"
+    "data: data,"
+    "contentType: false,"
+    "processData:false,"
+    "xhr: function() {"
+    "var xhr = new window.XMLHttpRequest();"
+    "xhr.upload.addEventListener('progress', function(evt) {"
+    "if (evt.lengthComputable) {"
+    "var per = evt.loaded / evt.total;"
+    "$('#prg').html('progress: ' + Math.round(per*100) + '%');"
+    "}"
+    "}, false);"
+    "return xhr;"
+    "},"
+    "success:function(d, s) {"
+    "console.log('success!')"
+    "},"
+    "error: function (a, b, c) {"
+    "}"
+    "});"
+    "});"
+    "</script>";
 
 // BLE Scanner vars
 static bool doConnect = false;
@@ -67,12 +109,12 @@ class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
       // if it's rateLimit has expired yet
       if (advDevice == NULL && isConnectionAllowed(id) && advertisedDevice->isConnectable())
       {
-        //Apple {0x4c, 0x00} is EVERYWHERE
-        //Literally everywhere
-        //You can scale your collection as much as you want,
-        //You will only seemingly get data from Apple devices.
-        //At a certain point (pretty much instantly), you've seen it all.
-        //Ignore them, and prioritize literally anything else.
+        // Apple {0x4c, 0x00} is EVERYWHERE
+        // Literally everywhere
+        // You can scale your collection as much as you want,
+        // You will only seemingly get data from Apple devices.
+        // At a certain point (pretty much instantly), you've seen it all.
+        // Ignore them, and prioritize literally anything else.
         int shouldSkip = 1;
         if (ignoreApple && advertisedDevice->getManufacturerData().length() >= 2)
         {
@@ -365,10 +407,42 @@ void setup()
     while (1)
       ;
   }
+  // Get our IP
   IPAddress myIP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
   Serial.println(myIP);
 
+  // Register OTA Update routes
+  server.on("/serverIndex", HTTP_GET, []()
+            {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/html", serverIndex); });
+  /*handling uploading firmware file */
+  server.on("/update", HTTP_POST, []()
+            {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    ESP.restart(); }, []()
+            {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("Update: %s\n", upload.filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      /* flashing firmware to ESP*/
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) { //true to set the size to the current progress
+        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+      } else {
+        Update.printError(Serial);
+      }
+    } });
+  // Register logger endpoint
   server.on("/logger", HTTP_POST, handlePost);
   server.begin();
 
@@ -377,7 +451,7 @@ void setup()
   parentDoc["mac"] = scannerMac;
   logDoc = parentDoc.createNestedObject("logs");
 
-  // Forcefully wait to start scanning until we've been registered
+  // Forcefully wait to start scanning until we've been registered or recieve an OTA update
   while (!syncedLogs)
   {
     server.handleClient();
