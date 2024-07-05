@@ -49,6 +49,7 @@ type RecordRow struct {
 	Mac                string
 	Name               string
 	ManufacturerData   []byte
+	Connectable        int
 	ServiceUUID        string
 	CharacteristicUUID string
 	Properties         int
@@ -87,23 +88,13 @@ func NewSqliteConn(dbPath string) *SqliteConn {
 
 func (sc *SqliteConn) CreateTables() error {
 	statement := `
-	CREATE TABLE "oui_lookup" (
-		"oui"	TEXT,
-		"company_name"	TEXT,
-		"address1"	TEXT,
-		"address2"	TEXT,
-		"country"	TEXT
-	);
-	CREATE TABLE "char_lookup" (
-		"characteristic_uuid"	TEXT,
-		"characteristic_name"	TEXT
-	);
 	CREATE TABLE "logs" (
 		id INTEGER not null primary key,
 		"gid" INTEGER,
 		"mac"	TEXT,
 		"name"	TEXT,
 		"man"	BLOB,
+		"conn"  INTEGER,
 		"svc"	TEXT,
 		"chr"	TEXT,
 		"props"	INTEGER,
@@ -224,13 +215,13 @@ func (sc *SqliteConn) InsertLogData(chnl chan RecordRow) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT INTO logs (gid, mac, name, man, svc, chr, props, val) VALUES (?,?,?,?,?,?,?,?)")
+	stmt, err := tx.Prepare("INSERT INTO logs (gid, mac, name, man, conn, svc, chr, props, val) VALUES (?,?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for v := range chnl {
-		_, err = stmt.Exec(v.Gid, v.Mac, v.Name, v.ManufacturerData, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
+		_, err = stmt.Exec(v.Gid, v.Mac, v.Name, v.ManufacturerData, v.Connectable, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
 		if err != nil {
 			return err
 		}
@@ -244,7 +235,7 @@ func (sc *SqliteConn) GenerateRecords() error {
 	CREATE TABLE IF NOT EXISTS logs_dedupe AS
 	select *
 	from logs
-	group by gid, mac, name, man, svc, chr, props, val;
+	group by gid, mac, name, man, conn, svc, chr, props, val;
 	`
 
 	records := `
@@ -254,6 +245,7 @@ func (sc *SqliteConn) GenerateRecords() error {
 		ld.mac as mac,
 			name,
 			ld.man as manufacturer_data,
+			ld.conn as connectable,
 			ld.svc as service_uuid,
 			ld.chr as characteristic_uuid,
 			ld.props as properties,
@@ -265,6 +257,7 @@ func (sc *SqliteConn) GenerateRecords() error {
 		mac,
 		name,
 		man,
+		conn,
 		svc,
 		chr,
 		props,
@@ -272,6 +265,7 @@ func (sc *SqliteConn) GenerateRecords() error {
 	order by
 		ld.gid,
 		ld.mac,
+		ld.conn,
 		ld.svc,
 		ld.chr,
 		ld.props,
@@ -279,8 +273,6 @@ func (sc *SqliteConn) GenerateRecords() error {
 	`
 
 	dropLogDedupe := `DROP TABLE logs_dedupe;`
-	dropOui := `DROP TABLE oui_lookup;`
-	dropchar := `DROP TABLE char_lookup;`
 
 	// vac := `VACUUM;`
 
@@ -322,36 +314,6 @@ func (sc *SqliteConn) GenerateRecords() error {
 		return err
 	}
 	stmt, err = tx.Prepare(dropLogDedupe)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	_, err = stmt.Exec()
-	if err != nil {
-		return err
-	}
-	tx.Commit()
-	//drop
-	tx, err = sc.DB.Begin()
-	if err != nil {
-		return err
-	}
-	stmt, err = tx.Prepare(dropOui)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	_, err = stmt.Exec()
-	if err != nil {
-		return err
-	}
-	tx.Commit()
-	//drop
-	tx, err = sc.DB.Begin()
-	if err != nil {
-		return err
-	}
-	stmt, err = tx.Prepare(dropchar)
 	if err != nil {
 		return err
 	}

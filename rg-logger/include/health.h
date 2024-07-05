@@ -16,7 +16,7 @@ struct HealthStatus
 
 HealthStatus healthStatusList[MAX_HEALTH_ITEMS];
 int seenScanners = 0;
-int expiration = 60000;
+int expiration = 5000;
 
 bool isScannerInList(uint8_t mac[6])
 {

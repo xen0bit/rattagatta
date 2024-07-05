@@ -87,6 +87,10 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 						record.ManufacturerData = man
 					}
 
+					if log.Connectable {
+						record.Connectable = 1
+					}
+
 					//Just Advertisment data
 					//fmt.Println(record)
 					logch <- record

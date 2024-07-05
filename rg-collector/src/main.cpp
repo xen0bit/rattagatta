@@ -17,7 +17,7 @@ int scannerCount = 1;
 char apple[2] = {0x4c, 0x00};
 bool ignoreApple = true;
 
-const char *ssid = "BLEAKEST01"; // SSID Name
+const char *ssid = "BLEAKEST14"; // SSID Name
 const char *password = "";       // SSID Password - Set to NULL to have an open AP
 // WiFi Channels 1, 6, and 11 have the least amount of overlap with BLE advertisement channels
 const int channel = 1;        // WiFi Channel number between 1 and 13
@@ -104,24 +104,19 @@ class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
       scanObj["connectable"] = advertisedDevice->isConnectable();
       scanObj["addr_type"] = advertisedDevice->getAddressType();
 
-      // Using the rateLimitId for a device advertisement, check if
-      // the rateLimitId is populated in our rateLimitList and/or
-      // if it's rateLimit has expired yet
-      if (advDevice == NULL && isConnectionAllowed(id) && advertisedDevice->isConnectable())
+      // Apple {0x4c, 0x00} is EVERYWHERE
+      // Literally everywhere
+      // You can scale your collection as much as you want,
+      // You will only seemingly get data from Apple devices.
+      // At a certain point (pretty much instantly), you've seen it all.
+      // Ignore them, and prioritize literally anything else.
+      char apl[2] = {0x4c, 0x00};
+      if (advertisedDevice->getManufacturerData().length() == 0 || memcmp((uint8_t *)advertisedDevice->getManufacturerData().data(), apl, 2) != 0)
       {
-        // Apple {0x4c, 0x00} is EVERYWHERE
-        // Literally everywhere
-        // You can scale your collection as much as you want,
-        // You will only seemingly get data from Apple devices.
-        // At a certain point (pretty much instantly), you've seen it all.
-        // Ignore them, and prioritize literally anything else.
-        int shouldSkip = 1;
-        if (ignoreApple && advertisedDevice->getManufacturerData().length() >= 2)
-        {
-          shouldSkip = memcmp((uint8_t *)advertisedDevice->getManufacturerData().data(), apple, 2);
-        }
-
-        if (shouldSkip != 0)
+        // Using the rateLimitId for a device advertisement, check if
+        // the rateLimitId is populated in our rateLimitList and/or
+        // if it's rateLimit has expired yet
+        if (advDevice == NULL && isConnectionAllowed(id) && advertisedDevice->isConnectable())
         {
           // Set device reference for upcoming connection attempt
           advDevice = advertisedDevice;
@@ -129,6 +124,10 @@ class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
           doConnect = true;
         }
       }
+      // else
+      // {
+      //   Serial.println("Avoided Apple device.");
+      // }
     }
     // LED OFF
     digitalWrite(LED_BUILTIN, LOW);
@@ -378,6 +377,9 @@ void handlePost()
     serializeJson(parentDoc, resp);
     server.send(200, "application/json", resp);
     syncedLogs = true;
+
+    // Duplicate to Serial for dbg
+    // Serial.println(resp);
   }
   else
   {
@@ -477,6 +479,14 @@ void loop()
       if (connectToServer())
       {
         Serial.println("done.");
+        // We must pause if any svc/chr in the devTree were potentially populated
+        // and wait for the logger to come through and pick it up.
+        // Failure to do so will clobber all 3rd level keys in the JSON
+        //  IE: the devTree
+        while (!syncedLogs)
+        {
+          server.handleClient();
+        }
       }
       else
       {
