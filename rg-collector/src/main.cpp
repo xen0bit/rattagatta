@@ -17,7 +17,7 @@ int scannerCount = 1;
 char apple[2] = {0x4c, 0x00};
 bool ignoreApple = true;
 
-const char *ssid = "BLEAKEST14"; // SSID Name
+const char *ssid = "BLEAKEST01"; // SSID Name
 const char *password = "";       // SSID Password - Set to NULL to have an open AP
 // WiFi Channels 1, 6, and 11 have the least amount of overlap with BLE advertisement channels
 const int channel = 1;        // WiFi Channel number between 1 and 13
