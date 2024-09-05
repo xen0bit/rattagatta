@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	inLog := flag.String("i", "", "Input file path to log.jsonl")
 	outDb := flag.String("o", "", "Output file path for SQLite database")
 

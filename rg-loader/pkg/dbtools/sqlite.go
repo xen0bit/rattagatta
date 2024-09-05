@@ -47,6 +47,7 @@ type CharRow struct {
 type RecordRow struct {
 	Gid                int
 	Mac                string
+	AddressType        int
 	Name               string
 	ManufacturerData   []byte
 	Connectable        int
@@ -92,6 +93,7 @@ func (sc *SqliteConn) CreateTables() error {
 		id INTEGER not null primary key,
 		"gid" INTEGER,
 		"mac"	TEXT,
+		"addr_type"  INTEGER,
 		"name"	TEXT,
 		"man"	BLOB,
 		"conn"  INTEGER,
@@ -215,13 +217,13 @@ func (sc *SqliteConn) InsertLogData(chnl chan RecordRow) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT INTO logs (gid, mac, name, man, conn, svc, chr, props, val) VALUES (?,?,?,?,?,?,?,?,?)")
+	stmt, err := tx.Prepare("INSERT INTO logs (gid, mac, addr_type, name, man, conn, svc, chr, props, val) VALUES (?,?,?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for v := range chnl {
-		_, err = stmt.Exec(v.Gid, v.Mac, v.Name, v.ManufacturerData, v.Connectable, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
+		_, err = stmt.Exec(v.Gid, v.Mac, v.AddressType, v.Name, v.ManufacturerData, v.Connectable, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
 		if err != nil {
 			return err
 		}
@@ -235,7 +237,7 @@ func (sc *SqliteConn) GenerateRecords() error {
 	CREATE TABLE IF NOT EXISTS logs_dedupe AS
 	select *
 	from logs
-	group by gid, mac, name, man, conn, svc, chr, props, val;
+	group by gid, mac, addr_type, name, man, conn, svc, chr, props, val;
 	`
 
 	records := `
@@ -243,6 +245,7 @@ func (sc *SqliteConn) GenerateRecords() error {
 	select
 		gid,
 		ld.mac as mac,
+		ld.addr_type as addr_type,
 			name,
 			ld.man as manufacturer_data,
 			ld.conn as connectable,

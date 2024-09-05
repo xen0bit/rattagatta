@@ -76,6 +76,8 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 					record.Gid = gid
 					//Mac
 					record.Mac = mac
+					//AddressType
+					record.AddressType = log.AddrType
 					//Name
 					name, err := hex.DecodeString(log.Name)
 					if err == nil {
