@@ -83,6 +83,8 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 					if err == nil {
 						record.Name = string(name)
 					}
+					//RSSI
+					record.Rssi = log.Rssi
 					//Manufacturer Data
 					man, err := hex.DecodeString(log.Man)
 					if err == nil {

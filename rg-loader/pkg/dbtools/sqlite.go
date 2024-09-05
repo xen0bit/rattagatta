@@ -49,6 +49,7 @@ type RecordRow struct {
 	Mac                string
 	AddressType        int
 	Name               string
+	Rssi               int
 	ManufacturerData   []byte
 	Connectable        int
 	ServiceUUID        string
@@ -95,6 +96,7 @@ func (sc *SqliteConn) CreateTables() error {
 		"mac"	TEXT,
 		"addr_type"  INTEGER,
 		"name"	TEXT,
+		"rssi"  INTEGER,
 		"man"	BLOB,
 		"conn"  INTEGER,
 		"svc"	TEXT,
@@ -217,13 +219,13 @@ func (sc *SqliteConn) InsertLogData(chnl chan RecordRow) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT INTO logs (gid, mac, addr_type, name, man, conn, svc, chr, props, val) VALUES (?,?,?,?,?,?,?,?,?,?)")
+	stmt, err := tx.Prepare("INSERT INTO logs (gid, mac, addr_type, name, rssi, man, conn, svc, chr, props, val) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for v := range chnl {
-		_, err = stmt.Exec(v.Gid, v.Mac, v.AddressType, v.Name, v.ManufacturerData, v.Connectable, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
+		_, err = stmt.Exec(v.Gid, v.Mac, v.AddressType, v.Name, v.Rssi, v.ManufacturerData, v.Connectable, v.ServiceUUID, v.CharacteristicUUID, v.Properties, v.ReadValue)
 		if err != nil {
 			return err
 		}
