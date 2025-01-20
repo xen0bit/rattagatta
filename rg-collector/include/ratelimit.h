@@ -112,7 +112,7 @@ uint32_t getRateLimitId(NimBLEAdvertisedDevice *advertisedDevice)
   // Public mac addr type "should" not change, suitable for rate limit key
   if (advertisedDevice->getAddressType() == BLE_ADDR_PUBLIC)
   {
-    checksum = CRC32::calculate(advertisedDevice->getAddress().getNative(), 6);
+    checksum = CRC32::calculate(advertisedDevice->getAddress().getVal(), 6);
   }
   // Random mac addr type can/do change, unsuitable for rate limit key
   // Use the manufacturer data instead. While man data may *also* change,
@@ -126,7 +126,7 @@ uint32_t getRateLimitId(NimBLEAdvertisedDevice *advertisedDevice)
     // The rarer mac addr types just use their mac as the rate limit key
     // As best as I can discern, there is no "best" choice here,
     // but mac is the simplest of them 
-    checksum = CRC32::calculate(advertisedDevice->getAddress().getNative(), 6);
+    checksum = CRC32::calculate(advertisedDevice->getAddress().getVal(), 6);
   }
   return checksum;
 }

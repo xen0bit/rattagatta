@@ -5,6 +5,9 @@
 #include <Update.h>
 #define CONFIG_BT_NIMBLE_EXT_ADV 1
 #include <NimBLEDevice.h>
+#if !CONFIG_BT_NIMBLE_EXT_ADV
+# error Must enable extended advertising, see nimconfig.h file.
+#endif
 #include <CRC32.h>
 #include <ArduinoJson.h>
 
@@ -76,11 +79,21 @@ JsonObject logDoc = parentDoc.createNestedObject("logs");
 
 // Bluetooth
 
+static NimBLEScan::Phy scanPhy = NimBLEScan::Phy::SCAN_ALL;
+
+/** Define a class to handle the callbacks when advertisements are received */
 NimBLEAdvertisedDevice *advDevice;
 
-/** Define a class to handle the callbacks when advertisments are received */
-class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
+class ScanCallbacks : public NimBLEScanCallbacks
 {
+  // void onResult(const NimBLEAdvertisedDevice *advertisedDevice)
+  // {
+  //   Serial.printf("Advertised Device found: %s\n PHY1: %d\n PHY2: %d\n",
+  //                 advertisedDevice->toString().c_str(),
+  //                 advertisedDevice->getPrimaryPhy(),
+  //                 advertisedDevice->getSecondaryPhy());
+  // }
+
   void onResult(NimBLEAdvertisedDevice *advertisedDevice)
   {
     // LED ON
@@ -94,11 +107,11 @@ class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
     if (getOwnership(id, scannerIndex, scannerCount))
     {
       JsonObject scanObj = logDoc.createNestedObject(advertisedDevice->getAddress().toString());
-      scanObj["name"] = NimBLEUtils::buildHexData(nullptr,
+      scanObj["name"] = NimBLEUtils::dataToHexString(
                                                   (uint8_t *)advertisedDevice->getName().data(),
                                                   advertisedDevice->getName().length());
       scanObj["rssi"] = advertisedDevice->getRSSI();
-      scanObj["man"] = NimBLEUtils::buildHexData(nullptr,
+      scanObj["man"] = NimBLEUtils::dataToHexString(
                                                  (uint8_t *)advertisedDevice->getManufacturerData().data(),
                                                  advertisedDevice->getManufacturerData().length());
       scanObj["connectable"] = advertisedDevice->isConnectable();
@@ -132,7 +145,90 @@ class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
     // LED OFF
     digitalWrite(LED_BUILTIN, LOW);
   }
-};
+
+  /** Callback to process the results of the completed scan or restart it */
+  void onScanEnd(const NimBLEScanResults &scanResults, int reason)
+  {
+    Serial.printf("Scan Ended, reason: %d; found %d devices\n", reason, scanResults.getCount());
+
+    /** Try Different PHY's */
+    switch (scanPhy)
+    {
+    case NimBLEScan::Phy::SCAN_ALL:
+      Serial.printf("Scanning only 1M PHY\n");
+      scanPhy = NimBLEScan::Phy::SCAN_1M;
+      break;
+    case NimBLEScan::Phy::SCAN_1M:
+      Serial.printf("Scanning only CODED PHY\n");
+      scanPhy = NimBLEScan::Phy::SCAN_CODED;
+      break;
+    case NimBLEScan::Phy::SCAN_CODED:
+      Serial.printf("Scanning all PHY's\n");
+      scanPhy = NimBLEScan::Phy::SCAN_ALL;
+      break;
+    }
+
+    NimBLEScan *pScan = NimBLEDevice::getScan();
+    pScan->setPhy(scanPhy);
+    pScan->start(scanTime);
+  }
+} scanCallbacks;
+
+/** Define a class to handle the callbacks when advertisments are received */
+// class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks
+// {
+//   void onResult(NimBLEAdvertisedDevice *advertisedDevice)
+//   {
+//     // LED ON
+//     digitalWrite(LED_BUILTIN, HIGH);
+//     // Convert device advertisement to a rateLimitId
+//     uint32_t id = getRateLimitId(advertisedDevice);
+//     // Use rateLimitId and our position in the mesh to determine
+//     // if the remote devices is "ours" to log it's advertisement data.
+//     // This prevents 15x devices logging the same advertisement data to the
+//     // server and it's SD card (duplicates)
+//     if (getOwnership(id, scannerIndex, scannerCount))
+//     {
+//       JsonObject scanObj = logDoc.createNestedObject(advertisedDevice->getAddress().toString());
+//       scanObj["name"] = NimBLEUtils::buildHexData(nullptr,
+//                                                   (uint8_t *)advertisedDevice->getName().data(),
+//                                                   advertisedDevice->getName().length());
+//       scanObj["rssi"] = advertisedDevice->getRSSI();
+//       scanObj["man"] = NimBLEUtils::buildHexData(nullptr,
+//                                                  (uint8_t *)advertisedDevice->getManufacturerData().data(),
+//                                                  advertisedDevice->getManufacturerData().length());
+//       scanObj["connectable"] = advertisedDevice->isConnectable();
+//       scanObj["addr_type"] = advertisedDevice->getAddressType();
+
+//       // Apple {0x4c, 0x00} is EVERYWHERE
+//       // Literally everywhere
+//       // You can scale your collection as much as you want,
+//       // You will only seemingly get data from Apple devices.
+//       // At a certain point (pretty much instantly), you've seen it all.
+//       // Ignore them, and prioritize literally anything else.
+//       char apl[2] = {0x4c, 0x00};
+//       if (advertisedDevice->getManufacturerData().length() == 0 || memcmp((uint8_t *)advertisedDevice->getManufacturerData().data(), apl, 2) != 0)
+//       {
+//         // Using the rateLimitId for a device advertisement, check if
+//         // the rateLimitId is populated in our rateLimitList and/or
+//         // if it's rateLimit has expired yet
+//         if (advDevice == NULL && isConnectionAllowed(id) && advertisedDevice->isConnectable())
+//         {
+//           // Set device reference for upcoming connection attempt
+//           advDevice = advertisedDevice;
+//           // Set flag that allows early-exiting the main loop()
+//           doConnect = true;
+//         }
+//       }
+//       // else
+//       // {
+//       //   Serial.println("Avoided Apple device.");
+//       // }
+//     }
+//     // LED OFF
+//     digitalWrite(LED_BUILTIN, LOW);
+//   }
+// };
 
 // Creates/Re-Uses Client, Connects, Walks GATT tree, reads, and leaves
 bool connectToServer()
@@ -140,7 +236,7 @@ bool connectToServer()
   NimBLEClient *pClient = nullptr;
 
   /** Check if we have a client we should reuse first **/
-  if (NimBLEDevice::getClientListSize())
+  if (NimBLEDevice::getCreatedClientCount())
   {
     /** Special case when we already know this device, we send false as the
      *  second argument in connect() to prevent refreshing the service database.
@@ -166,7 +262,7 @@ bool connectToServer()
   /** No client to reuse? Create a new one. */
   if (!pClient)
   {
-    if (NimBLEDevice::getClientListSize() >= NIMBLE_MAX_CONNECTIONS)
+    if (NimBLEDevice::getCreatedClientCount() >= NIMBLE_MAX_CONNECTIONS)
     {
       Serial.println("Max clients reached - no more connections available");
       return false;
@@ -211,27 +307,29 @@ bool connectToServer()
 
     JsonArray devTree = logDoc[pClient->getPeerAddress().toString().c_str()].createNestedArray("tree");
 
-    std::vector<NimBLERemoteService *> *pSvcs = pClient->getServices(true);
-    std::vector<NimBLERemoteService *>::iterator sit;
+    const std::vector<NimBLERemoteService *> pSvcs = pClient->getServices(true);
+    std::vector<NimBLERemoteService *>::const_iterator sit;
 
     // Iterate over services
-    for (sit = pSvcs->begin(); sit < pSvcs->end(); sit++)
+    for (sit = pSvcs.begin(); sit != pSvcs.end(); ++sit)
     {
       pSvc = *sit;
       if (pSvc)
       {
         // Iterate over characteristics
-        std::vector<NimBLERemoteCharacteristic *> *pChrs = pSvc->getCharacteristics(true);
-        std::vector<NimBLERemoteCharacteristic *>::iterator cit;
+        const std::vector<NimBLERemoteCharacteristic *> pChrs = pSvc->getCharacteristics(true);
+        std::vector<NimBLERemoteCharacteristic *>::const_iterator cit;
 
-        for (cit = pChrs->begin(); cit < pChrs->end(); cit++)
+        for (cit = pChrs.begin(); cit != pChrs.end(); ++cit)
         {
           pChr = *cit;
           if (pChr)
           { /** make sure it's not null */
             JsonObject nested = devTree.createNestedObject();
-            nested["svc"] = pSvc->getUUID().to128().toString();
-            nested["chr"] = pChr->getUUID().to128().toString();
+            // nested["svc"] = pSvc->getUUID().to128().toString();
+            nested["svc"] = pSvc->getUUID().toString();
+            // nested["chr"] = pChr->getUUID().to128().toString();
+            nested["chr"] = pChr->getUUID().toString();
 
             uint8_t charProp = 0x00;
             // Speed matters, assume you're traveling in a car at 70mph
@@ -241,9 +339,7 @@ bool connectToServer()
               // Set read property
               charProp = charProp | BLE_GATT_CHR_PROP_READ;
               NimBLEAttValue rv = pChr->readValue();
-              nested["val"] = NimBLEUtils::buildHexData(nullptr,
-                                                        (uint8_t *)rv.data(),
-                                                        rv.length());
+              nested["val"] = NimBLEUtils::dataToHexString((uint8_t *)rv.data(), rv.length());
             }
 
             // This is bullshit, there has to be a better way and I'm sorry but it *does* work
@@ -319,7 +415,8 @@ void setupBLE()
 
   // Register them callbacks (where the magic happens!) so we don't store
   // scanResults in memory
-  pScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
+  pScan->setScanCallbacks(&scanCallbacks);
+  // pScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
 
   // Some math was involved here, I don't remember, but it works and is faster than
   // default implementation.
