@@ -36,8 +36,8 @@
 // ---------------------------------------------------------------------------
 // Config — logger's AP that all collectors join
 // ---------------------------------------------------------------------------
-static const char    *LOGGER_SSID = "BLEAKEST";
-static const char    *LOGGER_PASS = "prevent_stray_clients";
+static const char *LOGGER_SSID = "BLEAKEST";
+static const char *LOGGER_PASS = "prevent_stray_clients";
 static const IPAddress LOGGER_IP(192, 168, 4, 1);
 
 // Must match COLLECTOR_FW_VERSION in rg-logger/src/main.cpp.
@@ -47,9 +47,9 @@ static const IPAddress LOGGER_IP(192, 168, 4, 1);
 // ---------------------------------------------------------------------------
 // Identity — persisted across reboots via NVS
 // ---------------------------------------------------------------------------
-static int    scannerIndex = 0;
-static int    scannerCount = 1;
-static int    lastLoggerFwVersion = 0;
+static int scannerIndex = 0;
+static int scannerCount = 1;
+static int lastLoggerFwVersion = 0;
 static String scannerMac;
 
 static void loadConfig()
@@ -73,8 +73,8 @@ static void saveConfig(int idx, int cnt)
 // ---------------------------------------------------------------------------
 // JSON log document — shared between NimBLE (core 0) and loop/HTTP (core 1)
 // ---------------------------------------------------------------------------
-static JsonDocument      parentDoc;
-static JsonObject        logDoc;
+static JsonDocument parentDoc;
+static JsonObject logDoc;
 static SemaphoreHandle_t docMutex;
 
 static void initLogDoc()
@@ -92,7 +92,7 @@ static void initLogDoc()
 static volatile bool doConnect = false;
 static NimBLEAddress advDeviceAddress;
 static const uint32_t SCAN_TIME = 0; // 0 = forever
-static NimBLEScan::Phy scanPhy   = NimBLEScan::Phy::SCAN_ALL;
+static NimBLEScan::Phy scanPhy = NimBLEScan::Phy::SCAN_ALL;
 
 // ---------------------------------------------------------------------------
 // Scan callbacks (runs on NimBLE host task, core 0)
@@ -102,22 +102,25 @@ class ScanCallbacks : public NimBLEScanCallbacks
   void onResult(const NimBLEAdvertisedDevice *dev) override
   {
     // Hard heap guard — skip rather than crash
-    if (ESP.getFreeHeap() < 40000) return;
+    if (ESP.getFreeHeap() < 40000)
+      return;
 
     uint32_t id = getRateLimitId(dev);
-    if (!getOwnership(id, scannerIndex, scannerCount)) return;
+    if (!getOwnership(id, scannerIndex, scannerCount))
+      return;
 
     // Short mutex timeout — never block the NimBLE stack
-    if (xSemaphoreTake(docMutex, pdMS_TO_TICKS(5)) != pdTRUE) return;
+    if (xSemaphoreTake(docMutex, pdMS_TO_TICKS(5)) != pdTRUE)
+      return;
 
     JsonObject scanObj = logDoc[dev->getAddress().toString()].to<JsonObject>();
     scanObj["name"] = NimBLEUtils::dataToHexString(
         (uint8_t *)dev->getName().data(), dev->getName().length());
-    scanObj["rssi"]      = dev->getRSSI();
-    scanObj["man"]       = NimBLEUtils::dataToHexString(
+    scanObj["rssi"] = dev->getRSSI();
+    scanObj["man"] = NimBLEUtils::dataToHexString(
         (uint8_t *)dev->getManufacturerData().data(), dev->getManufacturerData().length());
     scanObj["connectable"] = dev->isConnectable();
-    scanObj["addr_type"]   = dev->getAddressType();
+    scanObj["addr_type"] = dev->getAddressType();
 
     // Apple {0x4c,0x00} saturates the airwaves — skip for connection attempts
     const char apl[2] = {0x4c, 0x00};
@@ -143,7 +146,8 @@ static void disableBLEScanning()
   if (NimBLEDevice::getScan()->isScanning())
   {
     NimBLEDevice::getScan()->stop();
-    while (NimBLEDevice::getScan()->isScanning()) delay(1);
+    while (NimBLEDevice::getScan()->isScanning())
+      delay(1);
   }
 }
 
@@ -163,7 +167,8 @@ static bool connectToServer()
   NimBLEClient *pClient = NimBLEDevice::getClientByPeerAddress(advDeviceAddress);
   if (pClient)
   {
-    if (!pClient->connect(advDeviceAddress, false)) return false;
+    if (!pClient->connect(advDeviceAddress, false))
+      return false;
   }
   else
   {
@@ -186,7 +191,8 @@ static bool connectToServer()
     }
   }
 
-  if (!pClient->isConnected()) return false;
+  if (!pClient->isConnected())
+    return false;
 
   // Scan is stopped, so no concurrent onResult writes — mutex is still correct
   // for the HTTP handler which could serialize the doc at any time.
@@ -203,10 +209,12 @@ static bool connectToServer()
   const auto &svcs = pClient->getServices(true);
   for (auto *svc : svcs)
   {
-    if (!svc) continue;
+    if (!svc)
+      continue;
     for (auto *chr : svc->getCharacteristics(true))
     {
-      if (!chr) continue;
+      if (!chr)
+        continue;
       JsonObject node = devTree.add<JsonObject>();
       node["svc"] = svc->getUUID().toString();
       node["chr"] = chr->getUUID().toString();
@@ -218,11 +226,16 @@ static bool connectToServer()
         NimBLEAttValue rv = chr->readValue();
         node["val"] = NimBLEUtils::dataToHexString((uint8_t *)rv.data(), rv.length());
       }
-      if (chr->canBroadcast())       prop |= BLE_GATT_CHR_PROP_BROADCAST;
-      if (chr->canIndicate())        prop |= BLE_GATT_CHR_PROP_INDICATE;
-      if (chr->canNotify())          prop |= BLE_GATT_CHR_PROP_NOTIFY;
-      if (chr->canWrite())           prop |= BLE_GATT_CHR_PROP_WRITE;
-      if (chr->canWriteNoResponse()) prop |= BLE_GATT_CHR_PROP_WRITE_NO_RSP;
+      if (chr->canBroadcast())
+        prop |= BLE_GATT_CHR_PROP_BROADCAST;
+      if (chr->canIndicate())
+        prop |= BLE_GATT_CHR_PROP_INDICATE;
+      if (chr->canNotify())
+        prop |= BLE_GATT_CHR_PROP_NOTIFY;
+      if (chr->canWrite())
+        prop |= BLE_GATT_CHR_PROP_WRITE;
+      if (chr->canWriteNoResponse())
+        prop |= BLE_GATT_CHR_PROP_WRITE_NO_RSP;
       node["prop"] = prop;
     }
   }
@@ -231,7 +244,8 @@ static bool connectToServer()
 
   pClient->disconnect();
   unsigned long t = millis() + 3000;
-  while (pClient->isConnected() && millis() < t) delay(10);
+  while (pClient->isConnected() && millis() < t)
+    delay(10);
   NimBLEDevice::deleteClient(pClient);
   return true;
 }
@@ -260,7 +274,8 @@ static bool connectToLoggerAP()
   WiFi.mode(WIFI_STA);
   WiFi.begin(LOGGER_SSID, LOGGER_PASS);
   unsigned long t = millis() + 20000;
-  while (WiFi.status() != WL_CONNECTED && millis() < t) delay(200);
+  while (WiFi.status() != WL_CONNECTED && millis() < t)
+    delay(200);
   return WiFi.status() == WL_CONNECTED;
 }
 
@@ -271,7 +286,8 @@ static bool registerWithLogger()
   WiFiClient wc;
   HTTPClient http;
   String url = "http://" + LOGGER_IP.toString() + "/register";
-  if (!http.begin(wc, url)) return false;
+  if (!http.begin(wc, url))
+    return false;
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(5000);
 
@@ -307,7 +323,8 @@ static bool registerWithLogger()
 // Pull firmware from logger if versions differ. Reboots on success.
 static void checkAndApplyFirmwareUpdate()
 {
-  if (lastLoggerFwVersion == 0 || lastLoggerFwVersion == COLLECTOR_FW_VERSION) return;
+  if (lastLoggerFwVersion == 0 || lastLoggerFwVersion == COLLECTOR_FW_VERSION)
+    return;
 
   Serial.printf("OTA: local fw=%d logger fw=%d — updating\n",
                 COLLECTOR_FW_VERSION, lastLoggerFwVersion);
@@ -316,17 +333,17 @@ static void checkAndApplyFirmwareUpdate()
   t_httpUpdate_return ret = httpUpdate.update(wc, url);
   switch (ret)
   {
-    case HTTP_UPDATE_OK:
-      // httpUpdate reboots automatically after flashing
-      break;
-    case HTTP_UPDATE_FAILED:
-      Serial.printf("OTA failed (%d): %s\n",
-                    httpUpdate.getLastError(),
-                    httpUpdate.getLastErrorString().c_str());
-      break;
-    case HTTP_UPDATE_NO_UPDATES:
-      Serial.println("OTA: server reported no update");
-      break;
+  case HTTP_UPDATE_OK:
+    // httpUpdate reboots automatically after flashing
+    break;
+  case HTTP_UPDATE_FAILED:
+    Serial.printf("OTA failed (%d): %s\n",
+                  httpUpdate.getLastError(),
+                  httpUpdate.getLastErrorString().c_str());
+    break;
+  case HTTP_UPDATE_NO_UPDATES:
+    Serial.println("OTA: server reported no update");
+    break;
   }
 }
 
@@ -374,17 +391,16 @@ static void handleLoggerPost()
 
 static void setupHTTPServer()
 {
-  server.on("/serverIndex", HTTP_GET, []() {
+  server.on("/serverIndex", HTTP_GET, []()
+            {
     server.sendHeader("Connection", "close");
-    server.send(200, "text/html", OTA_PAGE);
-  });
-  server.on("/update", HTTP_POST,
-    []() {
+    server.send(200, "text/html", OTA_PAGE); });
+  server.on("/update", HTTP_POST, []()
+            {
       server.sendHeader("Connection", "close");
       server.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
-      ESP.restart();
-    },
-    []() {
+      ESP.restart(); }, []()
+            {
       HTTPUpload &up = server.upload();
       if (up.status == UPLOAD_FILE_START)
       {
@@ -402,8 +418,7 @@ static void setupHTTPServer()
           Serial.printf("OTA done: %u bytes\n", up.totalSize);
         else
           Update.printError(Serial);
-      }
-    });
+      } });
   server.on("/logger", HTTP_POST, handleLoggerPost);
   server.begin();
 }
@@ -462,8 +477,10 @@ void loop()
   {
     disableBLEScanning();
     Serial.println("WiFi lost — reconnecting");
-    while (!connectToLoggerAP()) delay(3000);
-    while (!registerWithLogger()) delay(2000);
+    while (!connectToLoggerAP())
+      delay(3000);
+    while (!registerWithLogger())
+      delay(2000);
     restartBLEScan();
   }
 
@@ -474,8 +491,10 @@ void loop()
     doConnect = false;
     disableBLEScanning();
     Serial.print("GATT -> ");
-    if (connectToServer()) Serial.println("ok");
-    else Serial.println("fail");
+    if (connectToServer())
+      Serial.println("ok");
+    else
+      Serial.println("fail");
     advDeviceAddress = NimBLEAddress{};
     restartBLEScan();
   }

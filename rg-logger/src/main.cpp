@@ -34,19 +34,19 @@
 // ---------------------------------------------------------------------------
 // AP config — collectors connect here
 // ---------------------------------------------------------------------------
-static const char *AP_SSID     = "BLEAKEST";
-static const char *AP_PASS     = "prevent_stray_clients";
-static const int   AP_CHANNEL  = 1; // minimal BLE-adv-channel overlap
-static const int   AP_MAX_STA  = 15;
+static const char *AP_SSID = "BLEAKEST";
+static const char *AP_PASS = "prevent_stray_clients";
+static const int AP_CHANNEL = 1; // minimal BLE-adv-channel overlap
+static const int AP_MAX_STA = 15;
 
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_SUBNET(255, 255, 255, 0);
 
 // LCD constants
-#define SCREEN_WIDTH  320
+#define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
-#define RECT_W        45
-#define RECT_H        60
+#define RECT_W 45
+#define RECT_H 60
 
 static long totalEvents = 0;
 
@@ -164,8 +164,8 @@ static void updateLcd()
   {
     for (int col = 0; col < cols; col++)
     {
-      int x  = col * RECT_W;
-      int y  = row * RECT_H;
+      int x = col * RECT_W;
+      int y = row * RECT_H;
       int si = (row * cols) + col;
 
       if (si < seenScanners)
@@ -192,7 +192,11 @@ static void updateLcd()
 static void appendLog(const String &log)
 {
   File f = SD.open("/log.jsonl", FILE_APPEND);
-  if (!f) { Serial.println("SD open failed"); return; }
+  if (!f)
+  {
+    Serial.println("SD open failed");
+    return;
+  }
   f.println(log);
   f.close();
   Serial.println("wrote log to SD");
@@ -201,12 +205,14 @@ static void appendLog(const String &log)
 static bool pollCollector(int idx)
 {
   IPAddress ip = healthStatusList[idx].ip;
-  if ((uint32_t)ip == 0) return false; // NVS-loaded entry not yet re-registered
+  if ((uint32_t)ip == 0)
+    return false; // NVS-loaded entry not yet re-registered
 
   WiFiClient wc;
   HTTPClient http;
   String url = "http://" + ip.toString() + "/logger";
-  if (!http.begin(wc, url)) return false;
+  if (!http.begin(wc, url))
+    return false;
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(8000); // allow time for any in-progress GATT walk to finish
 
@@ -262,7 +268,8 @@ void setup()
   if (!SD.begin())
   {
     M5.Lcd.println("SD init failed");
-    while (1) ;
+    while (1)
+      ;
   }
   M5.Lcd.println("SD OK");
 
@@ -279,7 +286,8 @@ void setup()
   if (!WiFi.softAP(AP_SSID, AP_PASS, AP_CHANNEL, false, AP_MAX_STA))
   {
     M5.Lcd.println("AP failed");
-    while (1) ;
+    while (1)
+      ;
   }
   Serial.printf("AP started: %s @ %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
 
@@ -299,7 +307,8 @@ void loop()
   // Poll every registered collector that has a valid IP
   for (int i = 0; i < seenScanners; i++)
   {
-    if (pollCollector(i)) updateScannerHealth(i);
+    if (pollCollector(i))
+      updateScannerHealth(i);
     updateLcd();
     // Keep handling registrations between polls so new collectors aren't missed
     server.handleClient();
