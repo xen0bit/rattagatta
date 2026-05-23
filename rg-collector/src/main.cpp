@@ -17,9 +17,6 @@ String scannerMac;
 int scannerIndex = 0;
 int scannerCount = 1;
 
-char apple[2] = {0x4c, 0x00};
-bool ignoreApple = true;
-
 const char *ssid = "BLEAKEST01"; // SSID Name
 const char *password = "";       // SSID Password - Set to NULL to have an open AP
 // WiFi Channels 1, 6, and 11 have the least amount of overlap with BLE advertisement channels
@@ -28,9 +25,6 @@ const bool hide_SSID = false; // To disable SSID broadcast -> SSID will not appe
 const int max_connection = 1; // Maximum simultaneous connected clients on the AP
 
 WebServer server(80);
-/*
- * Server Index Page
- */
 
 const char *serverIndex =
     "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
@@ -70,10 +64,11 @@ const char *serverIndex =
     "</script>";
 
 // BLE Scanner vars
-static bool doConnect = false;
+// FIX: volatile ensures the compiler doesn't optimize away cross-context reads
+static volatile bool doConnect = false;
 static uint32_t scanTime = 0; /** 0 = scan forever */
 
-// JSON doc for logging
+// JSON doc for logging (ArduinoJson v6 — incompatible with v7)
 DynamicJsonDocument parentDoc(5120);
 JsonObject logDoc = parentDoc.createNestedObject("logs");
 
@@ -81,29 +76,26 @@ JsonObject logDoc = parentDoc.createNestedObject("logs");
 
 static NimBLEScan::Phy scanPhy = NimBLEScan::Phy::SCAN_ALL;
 
-/** Define a class to handle the callbacks when advertisements are received */
-NimBLEAdvertisedDevice *advDevice;
+// FIX: store address copy, not raw pointer.
+// With setMaxResults(0), the NimBLEAdvertisedDevice* passed to onResult is
+// only valid for the duration of the callback — storing it is a dangling pointer.
+static NimBLEAddress advDeviceAddress;
 
 class ScanCallbacks : public NimBLEScanCallbacks
 {
-  // void onResult(const NimBLEAdvertisedDevice *advertisedDevice)
-  // {
-  //   Serial.printf("Advertised Device found: %s\n PHY1: %d\n PHY2: %d\n",
-  //                 advertisedDevice->toString().c_str(),
-  //                 advertisedDevice->getPrimaryPhy(),
-  //                 advertisedDevice->getSecondaryPhy());
-  // }
-
-  void onResult(NimBLEAdvertisedDevice *advertisedDevice)
+  // FIX: signature must match the virtual in NimBLEScanCallbacks exactly.
+  // The original non-const version does NOT override the virtual and the
+  // callback was silently never called.
+  void onResult(const NimBLEAdvertisedDevice *advertisedDevice) override
   {
     // LED ON
     digitalWrite(LED_BUILTIN, HIGH);
     // Convert device advertisement to a rateLimitId
     uint32_t id = getRateLimitId(advertisedDevice);
     // Use rateLimitId and our position in the mesh to determine
-    // if the remote devices is "ours" to log it's advertisement data.
-    // This prevents 15x devices logging the same advertisement data to the
-    // server and it's SD card (duplicates)
+    // if the remote device is "ours" to log its advertisement data.
+    // This prevents N devices logging the same advertisement data to the
+    // server and SD card (duplicates)
     if (getOwnership(id, scannerIndex, scannerCount))
     {
       JsonObject scanObj = logDoc.createNestedObject(advertisedDevice->getAddress().toString());
@@ -117,30 +109,20 @@ class ScanCallbacks : public NimBLEScanCallbacks
       scanObj["connectable"] = advertisedDevice->isConnectable();
       scanObj["addr_type"] = advertisedDevice->getAddressType();
 
-      // Apple {0x4c, 0x00} is EVERYWHERE
-      // Literally everywhere
-      // You can scale your collection as much as you want,
-      // You will only seemingly get data from Apple devices.
-      // At a certain point (pretty much instantly), you've seen it all.
-      // Ignore them, and prioritize literally anything else.
+      // Apple {0x4c, 0x00} is EVERYWHERE — skip them and prioritize anything else
       char apl[2] = {0x4c, 0x00};
       if (advertisedDevice->getManufacturerData().length() == 0 || memcmp((uint8_t *)advertisedDevice->getManufacturerData().data(), apl, 2) != 0)
       {
-        // Using the rateLimitId for a device advertisement, check if
-        // the rateLimitId is populated in our rateLimitList and/or
-        // if it's rateLimit has expired yet
-        if (advDevice == NULL && isConnectionAllowed(id) && advertisedDevice->isConnectable())
+        // Using the rateLimitId, check if the device is in our rate limit list
+        // and if the rate limit has expired
+        if (!doConnect && isConnectionAllowed(id) && advertisedDevice->isConnectable())
         {
-          // Set device reference for upcoming connection attempt
-          advDevice = advertisedDevice;
-          // Set flag that allows early-exiting the main loop()
+          // FIX: copy the address out; the advertisedDevice pointer is only
+          // valid for the duration of this callback when setMaxResults(0)
+          advDeviceAddress = advertisedDevice->getAddress();
           doConnect = true;
         }
       }
-      // else
-      // {
-      //   Serial.println("Avoided Apple device.");
-      // }
     }
     // LED OFF
     digitalWrite(LED_BUILTIN, LOW);
@@ -152,55 +134,39 @@ bool connectToServer()
 {
   NimBLEClient *pClient = nullptr;
 
-  /** Check if we have a client we should reuse first **/
-  if (NimBLEDevice::getCreatedClientCount())
+  // Try to reuse a client that already has cached services for this device
+  pClient = NimBLEDevice::getClientByPeerAddress(advDeviceAddress);
+  if (pClient)
   {
-    /** Special case when we already know this device, we send false as the
-     *  second argument in connect() to prevent refreshing the service database.
-     *  This saves considerable time and power.
-     */
-    pClient = NimBLEDevice::getClientByPeerAddress(advDevice->getAddress());
-    if (pClient)
+    // false = keep cached attributes, saves service discovery time
+    if (!pClient->connect(advDeviceAddress, false))
     {
-      if (!pClient->connect(advDevice, false))
-      {
-        return false;
-      }
-    }
-    /** We don't already have a client that knows this device,
-     *  we will check for a client that is disconnected that we can use.
-     */
-    else
-    {
-      pClient = NimBLEDevice::getDisconnectedClient();
-    }
-  }
-
-  /** No client to reuse? Create a new one. */
-  if (!pClient)
-  {
-    if (NimBLEDevice::getCreatedClientCount() >= NIMBLE_MAX_CONNECTIONS)
-    {
-      Serial.println("Max clients reached - no more connections available");
       return false;
     }
+  }
+  else
+  {
+    // Reuse a disconnected client if available, otherwise create one
+    pClient = NimBLEDevice::getDisconnectedClient();
+    if (!pClient)
+    {
+      if (NimBLEDevice::getCreatedClientCount() >= NIMBLE_MAX_CONNECTIONS)
+      {
+        Serial.println("Max clients reached - no more connections available");
+        return false;
+      }
+      pClient = NimBLEDevice::createClient();
+    }
 
-    pClient = NimBLEDevice::createClient();
-
-    // pClient->setClientCallbacks(&clientCB, false);
-
-    /** Set initial connection parameters: These settings are 15ms interval, 0 latency, 120ms timout.
-     *  These settings are safe for 3 clients to connect reliably, can go faster if you have less
-     *  connections. Timeout should be a multiple of the interval, minimum is 100ms.
+    /** Set initial connection parameters: 15ms interval, 0 latency, 510ms timeout.
+     *  These settings are safe for 3 clients to connect reliably.
      *  Min interval: 12 * 1.25ms = 15, Max interval: 12 * 1.25ms = 15, 0 latency, 51 * 10ms = 510ms timeout
      */
     pClient->setConnectionParams(12, 12, 0, 51);
-    /** Set how long we are willing to wait for the connection to complete (seconds), default is 30. */
     pClient->setConnectTimeout(3);
 
-    if (!pClient->connect(advDevice))
+    if (!pClient->connect(advDeviceAddress))
     {
-      /** Created a client but failed to connect, don't need to keep it as it has no data */
       NimBLEDevice::deleteClient(pClient);
       return false;
     }
@@ -208,94 +174,67 @@ bool connectToServer()
 
   if (!pClient->isConnected())
   {
-    if (!pClient->connect(advDevice))
-    {
-      return false;
-    }
+    return false;
   }
 
-  /** Now we can read/write/subscribe the charateristics of the services we are interested in */
   NimBLERemoteService *pSvc = nullptr;
   NimBLERemoteCharacteristic *pChr = nullptr;
-  NimBLERemoteDescriptor *pDsc = nullptr;
 
-  if (pClient->isConnected())
+  JsonArray devTree = logDoc[pClient->getPeerAddress().toString().c_str()].createNestedArray("tree");
+
+  const std::vector<NimBLERemoteService *> pSvcs = pClient->getServices(true);
+
+  // Iterate over services
+  for (auto sit = pSvcs.begin(); sit != pSvcs.end(); ++sit)
   {
-
-    JsonArray devTree = logDoc[pClient->getPeerAddress().toString().c_str()].createNestedArray("tree");
-
-    const std::vector<NimBLERemoteService *> pSvcs = pClient->getServices(true);
-    std::vector<NimBLERemoteService *>::const_iterator sit;
-
-    // Iterate over services
-    for (sit = pSvcs.begin(); sit != pSvcs.end(); ++sit)
+    pSvc = *sit;
+    if (pSvc)
     {
-      pSvc = *sit;
-      if (pSvc)
+      const std::vector<NimBLERemoteCharacteristic *> pChrs = pSvc->getCharacteristics(true);
+
+      for (auto cit = pChrs.begin(); cit != pChrs.end(); ++cit)
       {
-        // Iterate over characteristics
-        const std::vector<NimBLERemoteCharacteristic *> pChrs = pSvc->getCharacteristics(true);
-        std::vector<NimBLERemoteCharacteristic *>::const_iterator cit;
-
-        for (cit = pChrs.begin(); cit != pChrs.end(); ++cit)
+        pChr = *cit;
+        if (pChr)
         {
-          pChr = *cit;
-          if (pChr)
-          { /** make sure it's not null */
-            JsonObject nested = devTree.createNestedObject();
-            // nested["svc"] = pSvc->getUUID().to128().toString();
-            nested["svc"] = pSvc->getUUID().toString();
-            // nested["chr"] = pChr->getUUID().to128().toString();
-            nested["chr"] = pChr->getUUID().toString();
+          JsonObject nested = devTree.createNestedObject();
+          nested["svc"] = pSvc->getUUID().toString();
+          nested["chr"] = pChr->getUUID().toString();
 
-            uint8_t charProp = 0x00;
-            // Speed matters, assume you're traveling in a car at 70mph
-            // and another car going the opposite direction at 70mph passes you
-            if (pChr->canRead())
-            {
-              // Set read property
-              charProp = charProp | BLE_GATT_CHR_PROP_READ;
-              NimBLEAttValue rv = pChr->readValue();
-              nested["val"] = NimBLEUtils::dataToHexString((uint8_t *)rv.data(), rv.length());
-            }
-
-            // This is bullshit, there has to be a better way and I'm sorry but it *does* work
-            if (pChr->canBroadcast())
-            {
-              charProp = charProp | BLE_GATT_CHR_PROP_BROADCAST;
-            }
-            if (pChr->canIndicate())
-            {
-              charProp = charProp | BLE_GATT_CHR_PROP_INDICATE;
-            }
-            if (pChr->canNotify())
-            {
-              charProp = charProp | BLE_GATT_CHR_PROP_NOTIFY;
-            }
-            if (pChr->canWrite())
-            {
-              charProp = charProp | BLE_GATT_CHR_PROP_WRITE;
-            }
-            if (pChr->canWriteNoResponse())
-            {
-              charProp = charProp | BLE_GATT_CHR_PROP_WRITE_NO_RSP;
-            }
-
-            nested["prop"] = charProp;
+          uint8_t charProp = 0x00;
+          // Speed matters — assume you're traveling in a car at 70mph
+          // and another car going the opposite direction at 70mph passes you
+          if (pChr->canRead())
+          {
+            charProp = charProp | BLE_GATT_CHR_PROP_READ;
+            NimBLEAttValue rv = pChr->readValue();
+            nested["val"] = NimBLEUtils::dataToHexString((uint8_t *)rv.data(), rv.length());
           }
+          if (pChr->canBroadcast())
+            charProp = charProp | BLE_GATT_CHR_PROP_BROADCAST;
+          if (pChr->canIndicate())
+            charProp = charProp | BLE_GATT_CHR_PROP_INDICATE;
+          if (pChr->canNotify())
+            charProp = charProp | BLE_GATT_CHR_PROP_NOTIFY;
+          if (pChr->canWrite())
+            charProp = charProp | BLE_GATT_CHR_PROP_WRITE;
+          if (pChr->canWriteNoResponse())
+            charProp = charProp | BLE_GATT_CHR_PROP_WRITE_NO_RSP;
+
+          nested["prop"] = charProp;
         }
       }
     }
   }
 
-  // Cleanup
+  // Disconnect cleanly — call once and wait
   if (pClient->isConnected())
   {
     pClient->disconnect();
-    while (pClient->isConnected())
+    unsigned long timeout = millis() + 3000;
+    while (pClient->isConnected() && millis() < timeout)
     {
-      delay(50);
-      pClient->disconnect();
+      delay(10);
     }
     NimBLEDevice::deleteClient(pClient);
   }
@@ -303,72 +242,51 @@ bool connectToServer()
   return true;
 }
 
-// No-Op, leaving here in case I ever decide to use it
-void scanEndedCB(NimBLEScanResults results)
-{
-}
-
 // Configure BLE stack from scratch, set callbacks, and start an infinite scan
 void setupBLE()
 {
-  // We are a client, no devicename needed
   NimBLEDevice::init("");
 
-  // Set the transmit power, default is 3db
-#ifdef ESP_PLATFORM
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
-#else
-  NimBLEDevice::setPower(9); /** +9db */
-#endif
+  // FIX: NimBLE 2.x uses int8_t dBm directly; ESP_PWR_LVL_P9 is an enum
+  // value (not dBm) and would silently set the wrong power level
+  NimBLEDevice::setPower(9); /** +9 dBm */
 
-  // Create a scan
   NimBLEScan *pScan = NimBLEDevice::getScan();
 
-  // Disabled, not because we want duplicate events, but because radio advertisements
-  // for manufacturer data are sometimes not equally distributed. IE: devicename may
-  // only show in 1/3rd of advertisements when scanning really quickly. This allows us
-  // to just flatten in the JSON object.
+  // Disabled to get all manufacturer data variants across advertisements
   pScan->setDuplicateFilter(false);
 
-  // Register them callbacks (where the magic happens!) so we don't store
-  // scanResults in memory
   pScan->setScanCallbacks(&scanCallbacks);
-  // pScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
 
-  // Some math was involved here, I don't remember, but it works and is faster than
-  // default implementation.
+  // Tuned interval/window for faster scanning while leaving radio time for WiFi
   pScan->setInterval(45);
   pScan->setWindow(15);
-  // Store none of the scanResult in memory (callbacks only)
+  // Don't store scan results in memory — callbacks only
   pScan->setMaxResults(0);
 
-  //"active" probing of BLE servers to coerce them to give us that sweet sweet
-  // 31 bytes of manufacturer data without even needing a connection yet
+  // Active scan probes devices for 31 bytes of manufacturer data pre-connection
   pScan->setActiveScan(true);
 
   pScan->setPhy(scanPhy);
 
-  // Lets goooooooooooooooooooooooo
   pScan->start(scanTime, false, false);
 }
 
 void disableBLEScanning()
 {
-  // Ensure not scanning when connecting. BLE GAP events are strange, you get weird things if
-  // you don't do this
+  // Stop scanning before connecting — GAP events misbehave when both are active
   if (NimBLEDevice::getScan()->isScanning())
   {
-    // Serial.print("Forcing scan to stop...");
     NimBLEDevice::getScan()->stop();
     while (NimBLEDevice::getScan()->isScanning())
     {
       delay(1);
     }
-    // Serial.println("done");
   }
 }
 
-bool syncedLogs = false;
+// FIX: volatile ensures compiler doesn't cache the value across server.handleClient() calls
+static volatile bool syncedLogs = false;
 
 void handlePost()
 {
@@ -378,9 +296,7 @@ void handlePost()
   DynamicJsonDocument scannerInfo(256);
   if (DeserializationError::Ok == deserializeJson(scannerInfo, json))
   {
-    // The count of total scanners and our position within the index may change
-    // as new scanners are brought online/offline. With each logging, we update our
-    // locally cached information.
+    // Count and index may change as scanners come online/offline
     scannerIndex = scannerInfo["si"];
     int sc = scannerInfo["ss"];
     if (sc != 0)
@@ -388,19 +304,23 @@ void handlePost()
       scannerCount = sc;
     }
 
-    // Respond with our object
     String resp;
     serializeJson(parentDoc, resp);
     server.send(200, "application/json", resp);
     syncedLogs = true;
-
-    // Duplicate to Serial for dbg
-    // Serial.println(resp);
   }
   else
   {
     server.send(400, "text/plain", "Error");
   }
+}
+
+void resetLogDoc()
+{
+  parentDoc.clear();
+  parentDoc.garbageCollect();
+  parentDoc["mac"] = scannerMac;
+  logDoc = parentDoc.createNestedObject("logs");
 }
 
 void setup()
@@ -410,32 +330,31 @@ void setup()
   delay(5000);
   Serial.println("Starting...");
 
-  // initialize digital pin LED_BUILTIN as an output.
   pinMode(LED_BUILTIN, OUTPUT);
 
-  // dont be silly, im still gonna send it
-  // dont be silly, im still gonna send it
   esp_wifi_set_ps(WIFI_PS_NONE);
   WiFi.setSleep(false);
 
-  // Create the BLEAKEST WiFi Access Point Server
   if (!WiFi.softAP(ssid, password, channel, hide_SSID, max_connection))
   {
     log_e("Soft AP creation failed.");
     while (1)
       ;
   }
-  // Get our IP
   IPAddress myIP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
   Serial.println(myIP);
+
+  // FIX: populate scannerMac from the actual softAP MAC address
+  scannerMac = WiFi.softAPmacAddress();
+  Serial.print("Scanner MAC: ");
+  Serial.println(scannerMac);
 
   // Register OTA Update routes
   server.on("/serverIndex", HTTP_GET, []()
             {
     server.sendHeader("Connection", "close");
     server.send(200, "text/html", serverIndex); });
-  /*handling uploading firmware file */
   server.on("/update", HTTP_POST, []()
             {
     server.sendHeader("Connection", "close");
@@ -445,31 +364,26 @@ void setup()
     HTTPUpload& upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
       Serial.printf("Update: %s\n", upload.filename.c_str());
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
         Update.printError(Serial);
       }
     } else if (upload.status == UPLOAD_FILE_WRITE) {
-      /* flashing firmware to ESP*/
       if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
         Update.printError(Serial);
       }
     } else if (upload.status == UPLOAD_FILE_END) {
-      if (Update.end(true)) { //true to set the size to the current progress
+      if (Update.end(true)) {
         Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
       } else {
         Update.printError(Serial);
       }
     } });
-  // Register logger endpoint
   server.on("/logger", HTTP_POST, handlePost);
   server.begin();
 
-  // Construct base JSON document
-  parentDoc.to<JsonObject>();
-  parentDoc["mac"] = scannerMac;
-  logDoc = parentDoc.createNestedObject("logs");
+  resetLogDoc();
 
-  // Forcefully wait to start scanning until we've been registered or recieve an OTA update
+  // Wait for first registration from the logger before starting to scan
   while (!syncedLogs)
   {
     server.handleClient();
@@ -485,67 +399,48 @@ void loop()
   {
     if (doConnect)
     {
-      // LED ON
       digitalWrite(LED_BUILTIN, HIGH);
-      // BLE scanner my be writing to JSON Document
       disableBLEScanning();
       Serial.print("Attempting BTLE connection...");
-      // reset for next round
       doConnect = false;
       if (connectToServer())
       {
         Serial.println("done.");
-        // We must pause if any svc/chr in the devTree were potentially populated
-        // and wait for the logger to come through and pick it up.
-        // Failure to do so will clobber all 3rd level keys in the JSON
-        //  IE: the devTree
+        // Wait for the logger to collect the GATT tree before clearing the doc.
+        // Clearing while the logger is mid-read would clobber the tree entries.
         while (!syncedLogs)
         {
           server.handleClient();
         }
+        // FIX: reset immediately here so the scan restarts with a clean doc,
+        // not deferred to the next loop() iteration (which would accumulate duplicates)
+        syncedLogs = false;
+        resetLogDoc();
       }
       else
       {
         Serial.println("fail.");
       }
-      // Clear the NimBLE radio stack fully if we've attempted a connection
-      // NimBLEDevice::deinit(true);
 
-      advDevice = NULL;
-      // LED OFF
+      advDeviceAddress = NimBLEAddress{};
       digitalWrite(LED_BUILTIN, LOW);
       break;
     }
 
-    // Listen for a server connection
-    // POST handler disables BLE scanning if triggered
     server.handleClient();
 
-    // Check if we cleared the logs
     if (syncedLogs)
     {
       syncedLogs = false;
-      // BLE scanner my be writing to JSON Document
-      // disableBLEScanning();
-      // Reset our JSON doc to initial state
-      parentDoc.clear();
-      parentDoc.garbageCollect();
-      parentDoc["mac"] = scannerMac;
-      logDoc = parentDoc.createNestedObject("logs");
-
-      // NimBLEDevice::getScan()->clearResults();
-      // NimBLEDevice::getScan()->start(scanTime, scanEndedCB, false);
+      resetLogDoc();
       break;
     }
   }
 
   Serial.printf_P(PSTR("free heap memory: %d\n"), ESP.getFreeHeap());
-  // Logs were sent to server and WiFi has been disconnected
-  // Time to stand back up the BLE stack again!
   if (!NimBLEDevice::getScan()->isScanning())
   {
     NimBLEDevice::getScan()->clearResults();
     NimBLEDevice::getScan()->start(scanTime, false, false);
   }
-  // setupBLE();
 }

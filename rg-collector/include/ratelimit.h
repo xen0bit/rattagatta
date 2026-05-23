@@ -37,7 +37,8 @@ bool isIdInList(uint32_t id)
 void addIdToList(uint32_t id)
 {
   bool foundEmpty = false;
-  int oldestEntry = ULONG_MAX;
+  // FIX: must be unsigned long to hold ULONG_MAX without overflow/UB
+  unsigned long oldestEntry = ULONG_MAX;
   int writeIndex = 0;
 
   for (int i = 0; i < MAX_RATE_LIMIT_ITEMS; i++)
@@ -105,7 +106,7 @@ bool getOwnership(uint32_t id, int scannerIndex, int scannerCount)
   return false;
 }
 
-uint32_t getRateLimitId(NimBLEAdvertisedDevice *advertisedDevice)
+uint32_t getRateLimitId(const NimBLEAdvertisedDevice *advertisedDevice)
 {
   //We'll use a CRC32 checksum as the key for identifying a device
   uint32_t checksum;

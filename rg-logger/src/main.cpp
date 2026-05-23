@@ -127,12 +127,16 @@ bool connectWiFi(int scannerIndex)
   }
 }
 
-// Disconnects from GW-00 SSID. If already disconnected, this makes no changes.
+// Disconnects from the current AP. Safe to call when already disconnected.
 void disconnectWiFi()
 {
   Serial.println("Disconnecting from wifi...");
   WiFi.disconnect();
-  while (WiFi.status() != WL_DISCONNECTED)
+  // FIX: wait only while actually connected — the original condition
+  // (WL_DISCONNECTED) would hang forever when WiFi was never connected
+  // because the initial status is WL_IDLE_STATUS, not WL_DISCONNECTED
+  unsigned long timeout = millis() + 5000;
+  while (WiFi.status() == WL_CONNECTED && millis() < timeout)
   {
     delay(50);
   }
@@ -244,8 +248,10 @@ void loop()
         {
           updateScannerInList(healthStatusList[scannerIndex].mac);
         }
+        // FIX: disconnect before moving to the next scanner so WiFi.begin()
+        // on the next iteration starts from a clean state
+        disconnectWiFi();
       }
-      // disconnectWiFi();
     }
     updateLcd();
   }

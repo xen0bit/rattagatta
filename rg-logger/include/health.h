@@ -32,6 +32,12 @@ bool isScannerInList(uint8_t mac[6])
 
 void addScannerToList(uint8_t mac[6], String ssid, int32_t channel)
 {
+  // FIX: guard against overflowing the fixed-size healthStatusList array
+  if (seenScanners >= MAX_HEALTH_ITEMS)
+  {
+    Serial.println("Max scanners reached, ignoring new entry");
+    return;
+  }
   memcpy(healthStatusList[seenScanners].mac, mac, 6);
   healthStatusList[seenScanners].ssid = ssid;
   healthStatusList[seenScanners].channel = channel;
