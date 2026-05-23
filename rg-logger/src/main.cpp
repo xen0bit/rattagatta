@@ -157,7 +157,7 @@ bool getLogJson(int scannerIndex)
     {
       // Serialize JSON document to string
       String json;
-      DynamicJsonDocument registerScanner(256);
+      JsonDocument registerScanner;
       registerScanner["si"] = scannerIndex;
       registerScanner["ss"] = seenScanners;
       serializeJson(registerScanner, json);
@@ -173,7 +173,7 @@ bool getLogJson(int scannerIndex)
       if (respCode == 200)
       {
         // Read response into a JSON Doc
-        DynamicJsonDocument logDoc(5120);
+        JsonDocument logDoc;
         String resp = http.getString();
         if (DeserializationError::Ok == deserializeJson(logDoc, resp))
         {
@@ -209,7 +209,12 @@ bool getLogJson(int scannerIndex)
 
 void setup()
 {
+  // M5Core2 0.2.x marks begin() deprecated in favour of M5Unified; suppress
+  // until we migrate to M5Unified (would require re-working all LCD/sensor calls)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   M5.begin();
+#pragma GCC diagnostic pop
   if (!SD.begin())
   { // Initialize the SD card. 初始化SD卡
     M5.Lcd.println(

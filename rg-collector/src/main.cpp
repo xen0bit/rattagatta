@@ -68,9 +68,9 @@ const char *serverIndex =
 static volatile bool doConnect = false;
 static uint32_t scanTime = 0; /** 0 = scan forever */
 
-// JSON doc for logging (ArduinoJson v6 — incompatible with v7)
-DynamicJsonDocument parentDoc(5120);
-JsonObject logDoc = parentDoc.createNestedObject("logs");
+// JSON doc for logging (ArduinoJson v7: no capacity arg, dynamic allocation)
+JsonDocument parentDoc;
+JsonObject logDoc = parentDoc["logs"].to<JsonObject>();
 
 // Bluetooth
 
@@ -98,7 +98,7 @@ class ScanCallbacks : public NimBLEScanCallbacks
     // server and SD card (duplicates)
     if (getOwnership(id, scannerIndex, scannerCount))
     {
-      JsonObject scanObj = logDoc.createNestedObject(advertisedDevice->getAddress().toString());
+      JsonObject scanObj = logDoc[advertisedDevice->getAddress().toString()].to<JsonObject>();
       scanObj["name"] = NimBLEUtils::dataToHexString(
           (uint8_t *)advertisedDevice->getName().data(),
           advertisedDevice->getName().length());
@@ -180,7 +180,7 @@ bool connectToServer()
   NimBLERemoteService *pSvc = nullptr;
   NimBLERemoteCharacteristic *pChr = nullptr;
 
-  JsonArray devTree = logDoc[pClient->getPeerAddress().toString().c_str()].createNestedArray("tree");
+  JsonArray devTree = logDoc[pClient->getPeerAddress().toString().c_str()]["tree"].to<JsonArray>();
 
   const std::vector<NimBLERemoteService *> pSvcs = pClient->getServices(true);
 
@@ -197,7 +197,7 @@ bool connectToServer()
         pChr = *cit;
         if (pChr)
         {
-          JsonObject nested = devTree.createNestedObject();
+          JsonObject nested = devTree.add<JsonObject>();
           nested["svc"] = pSvc->getUUID().toString();
           nested["chr"] = pChr->getUUID().toString();
 
@@ -293,7 +293,7 @@ void handlePost()
   disableBLEScanning();
   String json = server.arg("plain");
   Serial.println(json);
-  DynamicJsonDocument scannerInfo(256);
+  JsonDocument scannerInfo;
   if (DeserializationError::Ok == deserializeJson(scannerInfo, json))
   {
     // Count and index may change as scanners come online/offline
@@ -318,9 +318,9 @@ void handlePost()
 void resetLogDoc()
 {
   parentDoc.clear();
-  parentDoc.garbageCollect();
+  parentDoc.shrinkToFit();
   parentDoc["mac"] = scannerMac;
-  logDoc = parentDoc.createNestedObject("logs");
+  logDoc = parentDoc["logs"].to<JsonObject>();
 }
 
 void setup()
