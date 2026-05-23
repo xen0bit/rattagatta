@@ -89,29 +89,40 @@ func NewSqliteConn(dbPath string) *SqliteConn {
 }
 
 func (sc *SqliteConn) CreateTables() error {
-	statement := `
-	CREATE TABLE "logs" (
-		id INTEGER not null primary key,
-		"gid" INTEGER,
-		"mac"	TEXT,
-		"addr_type"  INTEGER,
-		"name"	TEXT,
-		"rssi"  INTEGER,
-		"man"	BLOB,
-		"conn"  INTEGER,
-		"svc"	TEXT,
-		"chr"	TEXT,
-		"props"	INTEGER,
-		"val"	BLOB
-	);
-	`
-	_, err := sc.DB.Exec(statement)
-	if err != nil {
-		log.Printf("%q: %s\n", err, statement)
-		return err
-	} else {
-		return nil
+	stmts := []string{
+		`CREATE TABLE "logs" (
+			id        INTEGER NOT NULL PRIMARY KEY,
+			"gid"     INTEGER,
+			"mac"     TEXT,
+			"addr_type" INTEGER,
+			"name"    TEXT,
+			"rssi"    INTEGER,
+			"man"     BLOB,
+			"conn"    INTEGER,
+			"svc"     TEXT,
+			"chr"     TEXT,
+			"props"   INTEGER,
+			"val"     BLOB
+		);`,
+		`CREATE TABLE "oui_lookup" (
+			oui          TEXT NOT NULL PRIMARY KEY,
+			company_name TEXT,
+			address1     TEXT,
+			address2     TEXT,
+			country      TEXT
+		);`,
+		`CREATE TABLE "char_lookup" (
+			characteristic_uuid TEXT NOT NULL PRIMARY KEY,
+			characteristic_name TEXT
+		);`,
 	}
+	for _, s := range stmts {
+		if _, err := sc.DB.Exec(s); err != nil {
+			log.Printf("CreateTables: %q\n%s\n", err, s)
+			return err
+		}
+	}
+	return nil
 }
 
 func (sc *SqliteConn) InsertOuiData(chnl chan OuiRow) error {
@@ -244,37 +255,25 @@ func (sc *SqliteConn) GenerateRecords() error {
 
 	records := `
 	CREATE TABLE IF NOT EXISTS records AS
-	select
-		gid,
-		ld.mac as mac,
-		ld.addr_type as addr_type,
-			name,
-			ld.man as manufacturer_data,
-			ld.conn as connectable,
-			ld.svc as service_uuid,
-			ld.chr as characteristic_uuid,
-			ld.props as properties,
-			ld.val as val
-	from
-		logs_dedupe ld
-	group by
-		gid,
-		mac,
-		name,
-		man,
-		conn,
-		svc,
-		chr,
-		props,
-		val
-	order by
+	SELECT
 		ld.gid,
 		ld.mac,
-		ld.conn,
-		ld.svc,
-		ld.chr,
-		ld.props,
-		ld.val asc;
+		ld.addr_type,
+		ld.name,
+		ld.man  AS manufacturer_data,
+		ld.conn AS connectable,
+		ld.svc  AS service_uuid,
+		ld.chr  AS characteristic_uuid,
+		cl.characteristic_name,
+		ld.props AS properties,
+		ld.val
+	FROM logs_dedupe ld
+	LEFT JOIN char_lookup cl ON ld.chr = cl.characteristic_uuid
+	GROUP BY
+		ld.gid, ld.mac, ld.name, ld.man, ld.conn,
+		ld.svc, ld.chr, ld.props, ld.val
+	ORDER BY
+		ld.gid, ld.mac, ld.conn, ld.svc, ld.chr, ld.props, ld.val;
 	`
 
 	dropLogDedupe := `DROP TABLE logs_dedupe;`

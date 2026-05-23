@@ -1,264 +1,290 @@
+/**
+ * rg-logger — M5Stack Core2 coordinator
+ *
+ * New topology: logger creates the "BLEAKEST" AP. Collectors connect as STAs,
+ * POST to /register to receive their assigned index, then serve /logger at
+ * their own IP. The logger polls each registered collector sequentially over
+ * the shared 192.168.4.0/24 subnet — no WiFi reconnect per collector.
+ *
+ * MAC→index mapping is persisted in NVS (Preferences) so assignments survive
+ * a logger reboot without collector intervention.
+ */
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include <M5Core2.h>
+#pragma GCC diagnostic pop
+
 #include <Arduino.h>
 #include <WiFi.h>
-#include <esp_wifi.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
+#include <WebServer.h>
+#include <esp_wifi.h>
+#include <Preferences.h>
 #include "ArduinoJson.h"
-
-#include "utils.h"
 #include "health.h"
+#include "utils.h"
 
-// M5Stack Core2 LCD dimensions
-#define SCREEN_WIDTH 320
+// ---------------------------------------------------------------------------
+// AP config — collectors connect here
+// ---------------------------------------------------------------------------
+static const char *AP_SSID     = "BLEAKEST";
+static const char *AP_PASS     = "";
+static const int   AP_CHANNEL  = 1; // minimal BLE-adv-channel overlap
+static const int   AP_MAX_STA  = 15;
+
+static const IPAddress AP_IP(192, 168, 4, 1);
+static const IPAddress AP_SUBNET(255, 255, 255, 0);
+
+// LCD constants
+#define SCREEN_WIDTH  320
 #define SCREEN_HEIGHT 240
+#define RECT_W        45
+#define RECT_H        60
 
-char ssid[] = "BLEAKEST"; //  your network SSID (name)
-char pass[] = "";         // your network password
+static long totalEvents = 0;
 
-long totalEvents = 0;
+// ---------------------------------------------------------------------------
+// NVS MAC→index persistence
+// ---------------------------------------------------------------------------
+// Stored as "mac_N" (hex string) + "cnt" (total registered).
+// Allows index assignment to survive logger reboots.
 
-void appendLog(String log)
+static void nvsSaveMapping()
 {
-  File file = SD.open("/log.jsonl", FILE_APPEND);
-  if (!file)
+  Preferences p;
+  p.begin("rg-log", false);
+  p.putInt("cnt", seenScanners);
+  for (int i = 0; i < seenScanners; i++)
   {
-    Serial.println(F("Failed to create file"));
+    char key[8];
+    snprintf(key, sizeof(key), "mac_%d", i);
+    char mac[18];
+    snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+             healthStatusList[i].mac[0], healthStatusList[i].mac[1],
+             healthStatusList[i].mac[2], healthStatusList[i].mac[3],
+             healthStatusList[i].mac[4], healthStatusList[i].mac[5]);
+    p.putString(key, mac);
+  }
+  p.end();
+}
+
+static void nvsLoadMapping()
+{
+  Preferences p;
+  p.begin("rg-log", true);
+  int cnt = p.getInt("cnt", 0);
+  for (int i = 0; i < cnt && i < MAX_HEALTH_ITEMS; i++)
+  {
+    char key[8];
+    snprintf(key, sizeof(key), "mac_%d", i);
+    String ms = p.getString(key, "");
+    if (ms.length() == 17) // "xx:xx:xx:xx:xx:xx"
+    {
+      uint8_t mac[6];
+      macStringToBytes(mac, ms);
+      // IP is unknown until collector re-registers, leave as zero
+      // addScannerToList records the entry with index = seenScanners
+      addScannerToList(mac, IPAddress(0, 0, 0, 0));
+    }
+  }
+  p.end();
+}
+
+// ---------------------------------------------------------------------------
+// Registration HTTP endpoint
+// ---------------------------------------------------------------------------
+static WebServer server(80);
+
+static void handleRegister()
+{
+  JsonDocument reqDoc;
+  if (deserializeJson(reqDoc, server.arg("plain")) != DeserializationError::Ok)
+  {
+    server.send(400, "text/plain", "Bad JSON");
     return;
   }
-  file.println(log);
-  Serial.println("wrote log to disk");
-  file.close();
+
+  String macStr = reqDoc["mac"] | String("");
+  if (macStr.length() != 17)
+  {
+    server.send(400, "text/plain", "Invalid MAC");
+    return;
+  }
+
+  uint8_t mac[6];
+  macStringToBytes(mac, macStr);
+
+  IPAddress collectorIP = server.client().remoteIP();
+
+  int idx = getScannerIndex(mac);
+  if (idx == -1)
+  {
+    // New collector — assign next index
+    idx = addScannerToList(mac, collectorIP);
+    if (idx == -1)
+    {
+      server.send(503, "text/plain", "Scanner list full");
+      return;
+    }
+    nvsSaveMapping();
+    Serial.printf("New scanner #%d: %s @ %s\n",
+                  idx, macStr.c_str(), collectorIP.toString().c_str());
+  }
+  else
+  {
+    // Returning collector — update its IP (may have changed via DHCP)
+    healthStatusList[idx].ip = collectorIP;
+    Serial.printf("Re-registered #%d: %s @ %s\n",
+                  idx, macStr.c_str(), collectorIP.toString().c_str());
+  }
+
+  JsonDocument resp;
+  resp["si"] = idx;
+  resp["ss"] = seenScanners;
+  String body;
+  serializeJson(resp, body);
+  server.send(200, "application/json", body);
 }
 
-void updateLcd()
+// ---------------------------------------------------------------------------
+// LCD
+// ---------------------------------------------------------------------------
+static void updateLcd()
 {
-  int rows = 2;
-  int cols = 7;
-  int RECT_WIDTH = 45;
-  int RECT_HEIGHT = 60;
-  // Loop through each row
+  const int rows = 2, cols = 7;
   for (int row = 0; row < rows; row++)
   {
-    // Loop through each column
     for (int col = 0; col < cols; col++)
     {
-      // Calculate the x and y coordinates of the top-left corner of the current rectangle
-      int x = col * RECT_WIDTH;
-      int y = row * RECT_HEIGHT;
+      int x  = col * RECT_W;
+      int y  = row * RECT_H;
+      int si = (row * cols) + col;
 
-      int scannerIndex = (row * cols) + col;
-      if (scannerIndex < seenScanners)
+      if (si < seenScanners)
       {
-        bool isHealthy = getHealthy(scannerIndex);
-        // Draw the rectangle on the display
-        if (isHealthy)
-        {
-          M5.Lcd.fillRect(x, y, RECT_WIDTH, RECT_HEIGHT, TFT_GREEN);
-        }
-        else
-        {
-          M5.Lcd.fillRect(x, y, RECT_WIDTH, RECT_HEIGHT, TFT_RED);
-        }
+        uint16_t color = getHealthy(si) ? TFT_GREEN : TFT_RED;
+        M5.Lcd.fillRect(x, y, RECT_W, RECT_H, color);
       }
-
-      // Draw Grid on top of the color-coded rectanlges
-      M5.Lcd.drawRect(x, y, RECT_WIDTH, RECT_HEIGHT, TFT_WHITE);
-
-      // Label the grid with numbers for the scannerIndex
-      long gridLabel = (row * cols) + col;
+      M5.Lcd.drawRect(x, y, RECT_W, RECT_H, TFT_WHITE);
       M5.Lcd.setTextColor(TFT_WHITE);
       M5.Lcd.setTextSize(3);
-      M5.Lcd.drawNumber(gridLabel, x + 3, y + 3);
+      M5.Lcd.drawNumber((row * cols) + col, x + 3, y + 3);
     }
   }
 
-  // Render totalEvents
-  M5.Lcd.fillRect(0, (RECT_HEIGHT * 3), SCREEN_WIDTH, SCREEN_HEIGHT, TFT_BLACK);
-  int xo = (RECT_WIDTH * 0);
-  int yo = (RECT_HEIGHT * 3) + 5;
+  M5.Lcd.fillRect(0, RECT_H * 3, SCREEN_WIDTH, SCREEN_HEIGHT, TFT_BLACK);
   M5.Lcd.setTextColor(TFT_WHITE);
   M5.Lcd.setTextSize(7);
-  M5.Lcd.drawNumber(totalEvents, xo, yo);
+  M5.Lcd.drawNumber(totalEvents, 0, RECT_H * 3 + 5);
 }
 
-void sweepForBleakest()
+// ---------------------------------------------------------------------------
+// Collector polling — single HTTP POST to collector's IP, no reconnect
+// ---------------------------------------------------------------------------
+static void appendLog(const String &log)
 {
-  int n = WiFi.scanNetworks();
-  if (n != 0)
-  {
-    for (int i = 0; i < n; ++i)
-    {
-      if (WiFi.SSID(i).startsWith("BLEAKEST"))
-      {
-        uint8_t mac[6];
-        memcpy(mac, WiFi.BSSID(i), 6);
-
-        if (!isScannerInList(mac))
-        {
-          Serial.print("Adding ");
-          Serial.println(WiFi.BSSIDstr(i));
-          addScannerToList(mac, WiFi.SSID(i), WiFi.channel(i));
-        }
-      }
-    }
-  }
+  File f = SD.open("/log.jsonl", FILE_APPEND);
+  if (!f) { Serial.println("SD open failed"); return; }
+  f.println(log);
+  f.close();
+  Serial.println("wrote log to SD");
 }
 
-bool connectWiFi(int scannerIndex)
+static bool pollCollector(int idx)
 {
-  Serial.print("Connecting to wifi...");
-  WiFi.begin(healthStatusList[scannerIndex].ssid, pass, healthStatusList[scannerIndex].channel, healthStatusList[scannerIndex].mac);
-  // 10s timeout
-  unsigned long timeout = millis() + 5000;
-  while (WiFi.status() != WL_CONNECTED && millis() < timeout)
-  {
-    delay(50);
-  }
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    Serial.println("done.");
-    return true;
-  }
-  else
-  {
-    Serial.println("fail.");
-    return false;
-  }
-}
+  IPAddress ip = healthStatusList[idx].ip;
+  if ((uint32_t)ip == 0) return false; // NVS-loaded entry not yet re-registered
 
-// Disconnects from the current AP. Safe to call when already disconnected.
-void disconnectWiFi()
-{
-  Serial.println("Disconnecting from wifi...");
-  WiFi.disconnect();
-  // FIX: wait only while actually connected — the original condition
-  // (WL_DISCONNECTED) would hang forever when WiFi was never connected
-  // because the initial status is WL_IDLE_STATUS, not WL_DISCONNECTED
-  unsigned long timeout = millis() + 5000;
-  while (WiFi.status() == WL_CONNECTED && millis() < timeout)
-  {
-    delay(50);
-  }
-  Serial.println("done.");
-}
-
-bool getLogJson(int scannerIndex)
-{
-  WiFiClient client;
+  WiFiClient wc;
   HTTPClient http;
-  int respCode = 0;
+  String url = "http://" + ip.toString() + "/logger";
+  if (!http.begin(wc, url)) return false;
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(8000); // allow time for any in-progress GATT walk to finish
 
-  Serial.print("\nStarting TCP connection...");
-  if (client.connect(WiFi.gatewayIP(), 80))
+  JsonDocument reqDoc;
+  reqDoc["si"] = idx;
+  reqDoc["ss"] = seenScanners;
+  String body;
+  serializeJson(reqDoc, body);
+
+  int code = http.POST(body);
+  if (code == 200)
   {
-    Serial.println("connected...");
-    if (client.connected())
+    String resp = http.getString();
+    JsonDocument logDoc;
+    if (deserializeJson(logDoc, resp) == DeserializationError::Ok)
     {
-      // Serialize JSON document to string
-      String json;
-      JsonDocument registerScanner;
-      registerScanner["si"] = scannerIndex;
-      registerScanner["ss"] = seenScanners;
-      serializeJson(registerScanner, json);
-      // Serial.println(json);
-
-      // Construct and send POST
-      String endpoint = "http://" + WiFi.gatewayIP().toString() + "/logger";
-      http.begin(client, endpoint);
-      http.addHeader("Content-Type", "application/json");
-      respCode = http.POST(json);
-
-      // Success!
-      if (respCode == 200)
+      int n = logDoc["logs"].size();
+      if (n > 0)
       {
-        // Read response into a JSON Doc
-        JsonDocument logDoc;
-        String resp = http.getString();
-        if (DeserializationError::Ok == deserializeJson(logDoc, resp))
-        {
-          Serial.println("Deserialize OK!");
-          totalEvents += logDoc["logs"].size();
-          // serializeJsonPretty(logDoc, Serial);
-          // Serial.println(logDoc["logs"].size());
-          appendLog(resp);
-        }
+        totalEvents += n;
+        appendLog(resp);
       }
-      // Failure :(
-      else
-      {
-        Serial.print("failed to POST ");
-        Serial.print(respCode);
-        Serial.println("...");
-      }
-
-      // Disconnect
-      http.end();
     }
-  }
-
-  if (respCode == 200)
-  {
+    http.end();
     return true;
   }
-  else
-  {
-    return false;
-  }
+
+  Serial.printf("Poll #%d failed: %d\n", idx, code);
+  http.end();
+  return false;
 }
 
+// ---------------------------------------------------------------------------
+// setup / loop
+// ---------------------------------------------------------------------------
 void setup()
 {
-  // M5Core2 0.2.x marks begin() deprecated in favour of M5Unified; suppress
-  // until we migrate to M5Unified (would require re-working all LCD/sensor calls)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   M5.begin();
 #pragma GCC diagnostic pop
-  if (!SD.begin())
-  { // Initialize the SD card. 初始化SD卡
-    M5.Lcd.println(
-        "Card failed, or not present"); // Print a message if the SD card
-                                        // initialization fails or if the
-                                        // SD card does not exist
-    // 如果SD卡初始化失败或者SD卡不存在，则打印消息
-    while (1)
-      ;
-  }
-  M5.Lcd.println("TF card initialized.");
 
-  // dont be silly, im still gonna send it
+  if (!SD.begin())
+  {
+    M5.Lcd.println("SD init failed");
+    while (1) ;
+  }
+  M5.Lcd.println("SD OK");
+
   esp_wifi_set_ps(WIFI_PS_NONE);
   WiFi.setSleep(false);
 
-  WiFi.mode(WIFI_STA);
-  disconnectWiFi();
+  // Load previously-registered scanner MACs so they keep their indices
+  // across logger reboots (collectors will re-register and refresh their IPs)
+  nvsLoadMapping();
+
+  // Create AP — collectors connect here
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(AP_IP, AP_IP, AP_SUBNET);
+  if (!WiFi.softAP(AP_SSID, AP_PASS, AP_CHANNEL, false, AP_MAX_STA))
+  {
+    M5.Lcd.println("AP failed");
+    while (1) ;
+  }
+  Serial.printf("AP started: %s @ %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+
+  server.on("/register", HTTP_POST, handleRegister);
+  server.begin();
 
   M5.Lcd.clear(TFT_BLACK);
+  M5.Lcd.println("Waiting for collectors...");
 }
 
 void loop()
 {
-  sweepForBleakest();
-  for (int scannerIndex = 0; scannerIndex < seenScanners; scannerIndex++)
+  // Handle registration requests from newly-connected collectors
+  server.handleClient();
+
+  // Poll every registered collector that has a valid IP
+  for (int i = 0; i < seenScanners; i++)
   {
-    bool isHealthy = getHealthy(scannerIndex);
-    if (!isHealthy)
-    {
-      Serial.print("Targetting scanner: ");
-      Serial.println(scannerIndex);
-      if (connectWiFi(scannerIndex))
-      {
-        if (getLogJson(scannerIndex))
-        {
-          updateScannerInList(healthStatusList[scannerIndex].mac);
-        }
-        // FIX: disconnect before moving to the next scanner so WiFi.begin()
-        // on the next iteration starts from a clean state
-        disconnectWiFi();
-      }
-    }
+    if (pollCollector(i)) updateScannerHealth(i);
     updateLcd();
+    // Keep handling registrations between polls so new collectors aren't missed
+    server.handleClient();
   }
-  // delay(5000);
 }

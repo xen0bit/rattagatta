@@ -64,6 +64,9 @@ func ReadLog(path string, logch chan dbtools.RecordRow) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	// Default 64 KB limit silently drops lines from deeply-nested GATT trees;
+	// raise to 4 MB — well within typical RAM constraints.
+	scanner.Buffer(make([]byte, 4<<20), 4<<20)
 	ecnt := 0
 	gid := 0
 	for scanner.Scan() {

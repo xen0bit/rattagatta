@@ -1,92 +1,67 @@
+#pragma once
 #include <Arduino.h>
+#include <WiFi.h>
 
 #define MAX_HEALTH_ITEMS 15
 
-extern String ms;
-extern uint8_t mb[6];
-
 struct HealthStatus
 {
-  uint8_t mac[6];
-  String ssid;
-  uint32_t channel;
-  int eventCount;
+  uint8_t   mac[6];
+  IPAddress ip;          // collector's IP on the AP subnet (set at registration)
+  int       scannerIdx;  // assigned scanner index
+  int       eventCount;
   unsigned long lastUpdated;
 };
 
 HealthStatus healthStatusList[MAX_HEALTH_ITEMS];
 int seenScanners = 0;
-int expiration = 5000;
+
+// How long (ms) before a scanner is considered stale
+static const unsigned long HEALTH_EXPIRY_MS = 10000;
 
 bool isScannerInList(uint8_t mac[6])
 {
-  for (int i = 0; i < MAX_HEALTH_ITEMS; i++)
-  {
-    if (memcmp(healthStatusList[i].mac, mac, 6) == 0)
-    {
-      return true;
-    }
-  }
+  for (int i = 0; i < seenScanners; i++)
+    if (memcmp(healthStatusList[i].mac, mac, 6) == 0) return true;
   return false;
 }
 
-void addScannerToList(uint8_t mac[6], String ssid, int32_t channel)
+// Returns assigned scannerIndex, or -1 if list is full.
+int addScannerToList(uint8_t mac[6], IPAddress ip)
 {
-  // FIX: guard against overflowing the fixed-size healthStatusList array
   if (seenScanners >= MAX_HEALTH_ITEMS)
   {
-    Serial.println("Max scanners reached, ignoring new entry");
-    return;
+    Serial.println("Max scanners reached");
+    return -1;
   }
-  memcpy(healthStatusList[seenScanners].mac, mac, 6);
-  healthStatusList[seenScanners].ssid = ssid;
-  healthStatusList[seenScanners].channel = channel;
-  healthStatusList[seenScanners].eventCount = 0;
-  healthStatusList[seenScanners].lastUpdated = 0;
+  int idx = seenScanners;
+  memcpy(healthStatusList[idx].mac, mac, 6);
+  healthStatusList[idx].ip          = ip;
+  healthStatusList[idx].scannerIdx  = idx;
+  healthStatusList[idx].eventCount  = 0;
+  healthStatusList[idx].lastUpdated = 0;
   seenScanners++;
+  return idx;
 }
 
 int getScannerIndex(uint8_t mac[6])
 {
-  for (int i = 0; i < MAX_HEALTH_ITEMS; i++)
-  {
-    if (memcmp(healthStatusList[i].mac, mac, 6) == 0)
-    {
-      return i;
-    }
-  }
-  // Default
-  return 0;
-}
-
-void updateScannerInList(uint8_t mac[6])
-{
-  for (int i = 0; i < MAX_HEALTH_ITEMS; i++)
-  {
-    if (memcmp(healthStatusList[i].mac, mac, 6) == 0)
-    {
-      healthStatusList[i].eventCount++;
-      healthStatusList[i].lastUpdated = millis();
-    }
-  }
-}
-
-bool getHealthy(int scannerIndex)
-{
-  unsigned long ct = millis();
-  return healthStatusList[scannerIndex].lastUpdated + expiration > ct;
-}
-
-int getHealthyCount()
-{
-  // unsigned long ct = millis();
-  int healthyCount = 0;
   for (int i = 0; i < seenScanners; i++)
+    if (memcmp(healthStatusList[i].mac, mac, 6) == 0) return i;
+  return -1;
+}
+
+void updateScannerHealth(int idx)
+{
+  if (idx >= 0 && idx < seenScanners)
   {
-    if (getHealthy(i))
-    {
-      healthyCount++;
-    }
+    healthStatusList[idx].eventCount++;
+    healthStatusList[idx].lastUpdated = millis();
   }
-  return healthyCount;
+}
+
+bool getHealthy(int idx)
+{
+  if (idx < 0 || idx >= seenScanners) return false;
+  return (millis() - healthStatusList[idx].lastUpdated) < HEALTH_EXPIRY_MS;
 }
