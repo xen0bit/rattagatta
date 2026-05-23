@@ -1,0 +1,10 @@
+# PlatformIO build output
+**/.pio/
+
+# Generated at build time by `make embed-firmware`
+rg-logger/include/collector_firmware.h
+
+# Python / uv
+__pycache__/
+*.pyc
+.venv/

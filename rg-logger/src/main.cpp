@@ -25,12 +25,17 @@
 #include "ArduinoJson.h"
 #include "health.h"
 #include "utils.h"
+#include "collector_firmware.h"
+
+// Must match COLLECTOR_FW_VERSION in rg-collector/src/main.cpp.
+// Increment both together when deploying new collector firmware.
+#define COLLECTOR_FW_VERSION 1
 
 // ---------------------------------------------------------------------------
 // AP config — collectors connect here
 // ---------------------------------------------------------------------------
 static const char *AP_SSID     = "BLEAKEST";
-static const char *AP_PASS     = "";
+static const char *AP_PASS     = "prevent_stray_clients";
 static const int   AP_CHANNEL  = 1; // minimal BLE-adv-channel overlap
 static const int   AP_MAX_STA  = 15;
 
@@ -143,6 +148,7 @@ static void handleRegister()
   JsonDocument resp;
   resp["si"] = idx;
   resp["ss"] = seenScanners;
+  resp["fw"] = COLLECTOR_FW_VERSION;
   String body;
   serializeJson(resp, body);
   server.send(200, "application/json", body);
@@ -234,6 +240,16 @@ static bool pollCollector(int idx)
 }
 
 // ---------------------------------------------------------------------------
+// Collector firmware distribution
+// ---------------------------------------------------------------------------
+static void handleCollectorFirmware()
+{
+  server.sendHeader("Content-Disposition", "attachment; filename=collector.bin");
+  server.send_P(200, "application/octet-stream",
+                (const char *)collector_firmware, collector_firmware_len);
+}
+
+// ---------------------------------------------------------------------------
 // setup / loop
 // ---------------------------------------------------------------------------
 void setup()
@@ -268,6 +284,7 @@ void setup()
   Serial.printf("AP started: %s @ %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
 
   server.on("/register", HTTP_POST, handleRegister);
+  server.on("/collector_firmware", HTTP_GET, handleCollectorFirmware);
   server.begin();
 
   M5.Lcd.clear(TFT_BLACK);

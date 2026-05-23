@@ -16,6 +16,7 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
+#include <HTTPUpdate.h>
 #include <WebServer.h>
 #include <Update.h>
 #include <Preferences.h>
@@ -36,14 +37,19 @@
 // Config — logger's AP that all collectors join
 // ---------------------------------------------------------------------------
 static const char    *LOGGER_SSID = "BLEAKEST";
-static const char    *LOGGER_PASS = "";
+static const char    *LOGGER_PASS = "prevent_stray_clients";
 static const IPAddress LOGGER_IP(192, 168, 4, 1);
+
+// Must match COLLECTOR_FW_VERSION in rg-logger/src/main.cpp.
+// Increment both together when deploying new collector firmware.
+#define COLLECTOR_FW_VERSION 1
 
 // ---------------------------------------------------------------------------
 // Identity — persisted across reboots via NVS
 // ---------------------------------------------------------------------------
 static int    scannerIndex = 0;
 static int    scannerCount = 1;
+static int    lastLoggerFwVersion = 0;
 static String scannerMac;
 
 static void loadConfig()
@@ -283,6 +289,7 @@ static bool registerWithLogger()
     {
       int ni = resp["si"] | scannerIndex;
       int nc = resp["ss"] | scannerCount;
+      lastLoggerFwVersion = resp["fw"] | 0;
       if (ni != scannerIndex || nc != scannerCount)
       {
         scannerIndex = ni;
@@ -295,6 +302,32 @@ static bool registerWithLogger()
   }
   http.end();
   return false;
+}
+
+// Pull firmware from logger if versions differ. Reboots on success.
+static void checkAndApplyFirmwareUpdate()
+{
+  if (lastLoggerFwVersion == 0 || lastLoggerFwVersion == COLLECTOR_FW_VERSION) return;
+
+  Serial.printf("OTA: local fw=%d logger fw=%d — updating\n",
+                COLLECTOR_FW_VERSION, lastLoggerFwVersion);
+  WiFiClient wc;
+  String url = "http://" + LOGGER_IP.toString() + "/collector_firmware";
+  t_httpUpdate_return ret = httpUpdate.update(wc, url);
+  switch (ret)
+  {
+    case HTTP_UPDATE_OK:
+      // httpUpdate reboots automatically after flashing
+      break;
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("OTA failed (%d): %s\n",
+                    httpUpdate.getLastError(),
+                    httpUpdate.getLastErrorString().c_str());
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("OTA: server reported no update");
+      break;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +446,10 @@ void setup()
     Serial.print(".");
     delay(2000);
   }
-  Serial.printf(" idx=%d cnt=%d\n", scannerIndex, scannerCount);
+  Serial.printf(" idx=%d cnt=%d fw=%d\n", scannerIndex, scannerCount, lastLoggerFwVersion);
+
+  // Apply firmware update if logger carries a newer version; reboots on success.
+  checkAndApplyFirmwareUpdate();
 
   setupHTTPServer();
   setupBLE();
